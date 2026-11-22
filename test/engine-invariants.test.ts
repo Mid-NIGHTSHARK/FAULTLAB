@@ -352,6 +352,22 @@ describe('rate limiting, retries and breakers', () => {
   });
 });
 
+describe('traversal outcomes', () => {
+  it('marks completed cache hits, rate-limited calls, errors and retries from actual responses', () => {
+    const hit = sim([source(100), node('cache', 'cache', {cache:{keyCount:1,ttlMs:1_000}}), node('db','database')]);
+    const hitTicks = hit.step(100);
+    expect(hitTicks.flatMap(t=>t.edgeTraversals).some(e=>e.edgeId==='in->cache'&&e.outcome==='cache_hit')).toBe(true);
+    const limited = sim([source(100), node('svc','service',{rateLimiter:{rps:0,burst:0}})]);
+    expect(limited.step(100).flatMap(t=>t.edgeTraversals).some(e=>e.outcome==='rate_limited')).toBe(true);
+    const failed = sim([source(100,{retryPolicy:{strategy:'fixed',retryBudget:1}}),node('svc','service')]);
+    failed.injectFault(fault('latency_error','svc',{errorRate:1}));
+    expect(failed.step(100).flatMap(t=>t.edgeTraversals).some(e=>e.outcome==='error')).toBe(true);
+    const retried = sim([source(100,{retryPolicy:{strategy:'fixed',retryBudget:2}}),node('svc','service')]);
+    retried.injectFault(fault('latency_error','svc',{errorRate:0.5}));
+    expect(retried.step(1_000).flatMap(t=>t.edgeTraversals).some(e=>e.outcome==='retry')).toBe(true);
+  });
+});
+
 describe('cache, shards and live faults', () => {
   it('collapses concurrent same-key misses after synchronized expiry to one backend arrival', () => {
     function run(singleflight: boolean) {

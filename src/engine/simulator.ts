@@ -4,7 +4,7 @@ import { RollingMetrics, SlaBudgetTracker, type SlaBudgetSnapshot } from './metr
 import { createPrng, createZipfQuantile } from './prng';
 import { TraceRecorder } from './tracer';
 import type {
-  CircuitBreakerConfig, CircuitState, Edge, FaultEvent, IncidentScenario, NodeConfig, RequestTrace,
+  CircuitBreakerConfig, CircuitState, Edge, EdgeTraversal, FaultEvent, IncidentScenario, NodeConfig, RequestTrace,
   TickMetrics, Topology, TraceSpan, TraceStatus,
 } from './types';
 
@@ -20,13 +20,6 @@ export type NodeConfigPatch = Partial<Omit<NodeConfig,
   'id' | 'type' | 'retryPolicy' | 'circuitBreaker' | 'cache' | 'rateLimiter' | 'sharding' | 'edgeCircuitBreakers'>> & {
   [Key in 'retryPolicy' | 'circuitBreaker' | 'cache' | 'rateLimiter' | 'sharding']?: Partial<NodeConfig[Key]>;
 } & Pick<NodeConfig, 'edgeCircuitBreakers'>;
-
-export interface EdgeTraversal {
-  edgeId: string;
-  requestId: string;
-  atMs: number;
-  retryAttempt: number;
-}
 
 /** RPS counts offered arrivals. Latencies and error rates count completed responses. */
 export interface TickSnapshot {
@@ -50,7 +43,7 @@ const CRASH = { code: 503, status: 'error', reason: 'NODE_UNAVAILABLE' } as cons
 const TIMEOUT = { code: 504, status: 'timeout', reason: 'TIMEOUT' } as const;
 const INJECTED = { code: 503, status: 'error', reason: 'INJECTED_ERROR' } as const;
 
-interface Result { code: number; status: TraceStatus; reason?: string }
+interface Result { code: number; status: TraceStatus; reason?: string; cacheHit?: boolean }
 type Reply = (result: Result) => void;
 interface Request {
   id: string;
@@ -465,10 +458,12 @@ export function createSimulator(topology: Topology, options: SimulatorOptions) {
     publish(request);
   }
 
-  function sampleTraversal(link: Link, request: Request, retryAttempt: number): void {
+  function sampleTraversal(link: Link, request: Request, retryAttempt: number, result: Result): void {
     const seen = ++visualSeen;
     const index = seen <= VISUAL_LIMIT ? seen - 1 : visualRng.nextInt(0, seen - 1);
-    if (index < VISUAL_LIMIT) visual[index] = { edgeId: link.edge.id, requestId: request.id, atMs: now, retryAttempt };
+    if (index < VISUAL_LIMIT) visual[index] = { edgeId: link.edge.id, requestId: request.id, atMs: now, retryAttempt,
+      outcome: result.code === 429 ? 'rate_limited' : result.status !== 'ok' ? 'error' :
+        retryAttempt > 0 ? 'retry' : result.cacheHit ? 'cache_hit' : 'ok' };
   }
 
   function forward(
@@ -496,12 +491,13 @@ export function createSimulator(topology: Topology, options: SimulatorOptions) {
         const epoch = link.breaker.admit(now, breakerConfig());
         if (epoch === undefined) {
           const blocked = newSpan(request, link.target, previous, attempt);
+          sampleTraversal(link, request, attempt, CIRCUIT_OPEN);
           finishSpan(request, blocked, CIRCUIT_OPEN);
           finish(CIRCUIT_OPEN);
           return;
         }
-        sampleTraversal(link, request, attempt);
         invoke(link.target, request, key, previous, attempt, (result, span) => {
+          sampleTraversal(link, request, attempt, result);
           link.breaker.settle(epoch, now, result.status !== 'ok', breakerConfig());
           const policy = machine.config.retryPolicy;
           if (result.code < 500 || result === CIRCUIT_OPEN || policy.strategy === 'none' ||
@@ -633,7 +629,7 @@ export function createSimulator(topology: Topology, options: SimulatorOptions) {
     const rank = machine.quantile(key);
     if ((machine.cache.get(rank) ?? -1) > now) {
       report('hit');
-      reply(OK);
+      reply({ ...OK, cacheHit: true });
       return;
     }
     report('miss');

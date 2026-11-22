@@ -47,7 +47,7 @@ export function TopologyCanvas({ topology, snapshot, selected, onSelect }: Props
           const target = topology.edges.find((edge) => edge.id === event.edgeId)?.targetNodeId;
           const metric = target ? snapshot.nodes[target] : undefined;
           particles.current.push({ edge: event.edgeId, progress: 0, speed: 1 / Math.max(0.35, Math.min(2, (metric?.p95 ?? 50) / 100)),
-            color: event.retryAttempt > 0 ? '#a855f7' : (metric?.errorRate ?? 0) > 0.1 ? '#ef4444' : target && nodes.get(target)?.type === 'cache' ? '#06b6d4' : '#10b981' });
+            color: {ok:'#10B981',cache_hit:'#06B6D4',retry:'#A855F7',rate_limited:'#F59E0B',error:'#EF4444'}[event.outcome] });
         }
       }
       const elapsed = Math.min((time - previous) / 1000, 0.05); previous = time;

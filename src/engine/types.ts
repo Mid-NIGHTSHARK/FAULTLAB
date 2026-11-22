@@ -60,6 +60,16 @@ export interface NodeConfig {
   sharding: ShardingConfig;
 }
 
+export type TraversalOutcome = 'ok' | 'cache_hit' | 'retry' | 'rate_limited' | 'error';
+
+export interface EdgeTraversal {
+  edgeId: string;
+  requestId: string;
+  atMs: number;
+  retryAttempt: number;
+  outcome: TraversalOutcome;
+}
+
 export interface Edge {
   id: string;
   sourceNodeId: string;
