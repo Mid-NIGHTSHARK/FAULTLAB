@@ -1,0 +1,113 @@
+/** Configuration and output contracts for the simulation core. Durations use milliseconds. */
+export type NodeType = 'traffic' | 'gateway' | 'service' | 'cache' | 'database' | 'queue' | 'external';
+export type CircuitState = 'closed' | 'open' | 'half_open';
+
+export interface RetryPolicy {
+  strategy: 'none' | 'fixed' | 'exponential_jitter';
+  /** Maximum retries per request. */
+  retryBudget: number;
+  delayMs: number;
+}
+
+export interface CircuitBreakerConfig {
+  failureThreshold: number;
+  resetTimeoutMs: number;
+  halfOpenMaxRequests: number;
+}
+
+export interface CacheConfig {
+  ttlMs: number;
+  ttlJitterPercent: number;
+  singleflight: boolean;
+}
+
+export interface RateLimiterConfig {
+  rps: number;
+  burst: number;
+}
+
+export interface ShardingConfig {
+  shardCount: number;
+  zipfSkew: number;
+}
+
+export interface NodeConfig {
+  id: string;
+  name: string;
+  type: NodeType;
+  workerPoolCapacity: number;
+  maxQueueSize: number;
+  baseLatencyMs: number;
+  timeoutMs: number;
+  retryPolicy: RetryPolicy;
+  circuitBreaker: CircuitBreakerConfig;
+  cache: CacheConfig;
+  rateLimiter: RateLimiterConfig;
+  sharding: ShardingConfig;
+}
+
+export interface Edge {
+  id: string;
+  sourceNodeId: string;
+  targetNodeId: string;
+}
+
+export interface Topology {
+  id: string;
+  name: string;
+  nodes: NodeConfig[];
+  edges: Edge[];
+}
+
+export interface FaultEvent {
+  id: string;
+  nodeId: string;
+  kind: string;
+  startMs: number;
+  durationMs: number;
+  /** Fault-specific parameters, interpreted by the fault implementation. */
+  parameters: Record<string, string | number | boolean>;
+}
+
+export interface TraceSpan {
+  id: string;
+  parentSpanId?: string;
+  nodeId: string;
+  startMs: number;
+  durationMs: number;
+  status: 'ok' | 'error' | 'timeout';
+}
+
+export interface RequestTrace {
+  requestId: string;
+  startMs: number;
+  durationMs: number;
+  spans: TraceSpan[];
+}
+
+export interface TickMetrics {
+  rps: number;
+  errorRate: number;
+  p50: number;
+  p95: number;
+  p99: number;
+  queueDepth: number;
+  activeWorkers: number;
+  cacheHitRate: number;
+  circuitState: CircuitState;
+  perShardLoad: number[];
+}
+
+export interface IncidentScenario {
+  id: string;
+  name: string;
+  brief: string;
+  topology: Topology;
+  slaTargets: {
+    availability: number;
+    p95LatencyMs: number;
+  };
+  errorBudget: number;
+  initialFaults: FaultEvent[];
+  canonicalFixHints: string[];
+}
