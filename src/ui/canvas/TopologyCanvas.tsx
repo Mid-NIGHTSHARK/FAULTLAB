@@ -8,16 +8,19 @@ interface Props {
   snapshot: TickSnapshot;
   selected: string | null;
   onSelect: (id: string) => void;
+  editable?: boolean;
+  connectMode?: boolean;
+  onMove?: (id:string,x:number,y:number)=>void;
 }
 
-export function TopologyCanvas({ topology, snapshot, selected, onSelect }: Props) {
+export function TopologyCanvas({ topology, snapshot, selected, onSelect, editable, connectMode, onMove }: Props) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const latest = useRef({ topology, snapshot, selected, onSelect });
   latest.current = { topology, snapshot, selected, onSelect };
   const view = useRef({ zoom: 1, x: 0, y: 0 });
   const particles = useRef<Particle[]>([]);
   const seen = useRef(-1);
-  const drag = useRef<{ x: number; y: number; moved: boolean } | null>(null);
+  const drag = useRef<{ x: number; y: number; moved: boolean; nodeId?: string } | null>(null);
   const fit = () => { view.current = { zoom: 1, x: 0, y: 0 }; };
 
   useEffect(() => { fit(); particles.current = []; seen.current = -1; }, [topology.id]);
@@ -89,9 +92,38 @@ export function TopologyCanvas({ topology, snapshot, selected, onSelect }: Props
   }, []);
   return <div className="canvas-wrap">
     <canvas ref={canvas} aria-label="Interactive service topology" onWheel={(e) => { e.preventDefault(); view.current.zoom = Math.max(.45,Math.min(2.5,view.current.zoom * (e.deltaY > 0 ? .9 : 1.1))); }}
-      onPointerDown={(e) => { drag.current = { x:e.clientX,y:e.clientY,moved:false }; e.currentTarget.setPointerCapture(e.pointerId); }}
-      onPointerMove={(e) => { if (!drag.current) return; const dx=e.clientX-drag.current.x,dy=e.clientY-drag.current.y; if (Math.abs(dx)+Math.abs(dy)>1) drag.current.moved=true; view.current.x+=dx; view.current.y+=dy; drag.current.x=e.clientX; drag.current.y=e.clientY; }}
-      onPointerUp={(e) => { if (drag.current && !drag.current.moved) { const rect=e.currentTarget.getBoundingClientRect(); const scale=Math.min((rect.width-100)/1000,(rect.height-70)/560)*view.current.zoom; const x=(e.clientX-rect.left-rect.width/2-view.current.x)/scale+500; const y=(e.clientY-rect.top-rect.height/2-view.current.y)/scale+280; const hit=topology.nodes.find(n=>Math.abs(n.x-x)<76&&Math.abs(n.y-y)<55); if(hit) onSelect(hit.id); } drag.current=null; }} />
+      onPointerDown={(e) => {
+        const rect=e.currentTarget.getBoundingClientRect();
+        const scale=Math.min((rect.width-100)/1000,(rect.height-70)/560)*view.current.zoom;
+        const x=(e.clientX-rect.left-rect.width/2-view.current.x)/scale+500;
+        const y=(e.clientY-rect.top-rect.height/2-view.current.y)/scale+280;
+        const hit=topology.nodes.find(n=>Math.abs(n.x-x)<76&&Math.abs(n.y-y)<55);
+        drag.current={x:e.clientX,y:e.clientY,moved:false,nodeId:editable&&!connectMode?hit?.id:undefined};
+        e.currentTarget.setPointerCapture(e.pointerId);
+      }}
+      onPointerMove={(e) => {
+        if (!drag.current) return;
+        const dx=e.clientX-drag.current.x,dy=e.clientY-drag.current.y;
+        if (Math.abs(dx)+Math.abs(dy)>1) drag.current.moved=true;
+        if(drag.current.nodeId && onMove) {
+          const rect=e.currentTarget.getBoundingClientRect();
+          const scale=Math.min((rect.width-100)/1000,(rect.height-70)/560)*view.current.zoom;
+          const node=topology.nodes.find(n=>n.id===drag.current?.nodeId);
+          if(node) onMove(node.id,Math.max(76,Math.min(924,node.x+dx/scale)),Math.max(55,Math.min(505,node.y+dy/scale)));
+        } else {view.current.x+=dx;view.current.y+=dy;}
+        drag.current.x=e.clientX;drag.current.y=e.clientY;
+      }}
+      onPointerUp={(e) => {
+        if (drag.current && !drag.current.moved) {
+          const rect=e.currentTarget.getBoundingClientRect();
+          const scale=Math.min((rect.width-100)/1000,(rect.height-70)/560)*view.current.zoom;
+          const x=(e.clientX-rect.left-rect.width/2-view.current.x)/scale+500;
+          const y=(e.clientY-rect.top-rect.height/2-view.current.y)/scale+280;
+          const hit=topology.nodes.find(n=>Math.abs(n.x-x)<76&&Math.abs(n.y-y)<55);
+          if(hit) onSelect(hit.id);
+        }
+        drag.current=null;
+      }} />
     <div className="canvas-heading"><span className="eyebrow">LIVE TOPOLOGY</span><span>Request flow</span></div>
     <button className="fit-button" onClick={fit}>⊞ &nbsp; Fit view</button>
     <div className="canvas-legend"><span><i className="green"/>Healthy</span><span><i className="cyan"/>Cache</span><span><i className="violet"/>Retry</span><span><i className="red"/>Error</span></div>
