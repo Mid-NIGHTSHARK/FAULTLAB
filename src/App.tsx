@@ -31,6 +31,12 @@ function initialWorld() {
   }
   return { id:incidents[0].id as string, seed:73, world:makeWorld(incidents[0].id,73) };
 }
+function primaryNode(topology: ScenarioTopology): string | null {
+  return (topology.nodes.find(node => node.type === 'cache') ??
+    topology.nodes.find(node => node.type === 'service') ??
+    topology.nodes.find(node => node.type === 'gateway'))?.id ?? null;
+}
+
 export default function App() {
   const initial=useRef<ReturnType<typeof initialWorld> | null>(null);
   if (!initial.current) initial.current=initialWorld();
@@ -43,7 +49,7 @@ export default function App() {
   const [snapshot,setSnapshot]=useState(world.current.simulator.getSnapshot());
   const [generation,setGeneration]=useState(0);
   const [history,setHistory]=useState<TickSnapshot[]>([]);
-  const [selected,setSelected]=useState<string|null>(null);
+  const [selected,setSelected]=useState<string|null>(()=>primaryNode(initial.current!.world.topology));
   const [sideCollapsed,setSideCollapsed]=useState(false);
   const [dockCollapsed,setDockCollapsed]=useState(false);
   const [connectMode,setConnectMode]=useState(false);
@@ -63,7 +69,7 @@ export default function App() {
   const speedRef=useRef(speed); speedRef.current=speed;
   const reset=useCallback((newId:string,newSeed:number)=>{
     world.current=makeWorld(newId,newSeed); setId(newId); setSeed(newSeed); setTopology(world.current.topology);
-    setSnapshot(world.current.simulator.getSnapshot()); setHistory([]); setSelected(null);setGeneration(value=>value+1);
+    setSnapshot(world.current.simulator.getSnapshot()); setHistory([]); setSelected(primaryNode(world.current.topology));setGeneration(value=>value+1);
     baselineTopology.current=world.current.scenario?.topology??world.current.topology;
     outage.current={peak:null,maxP99:0,maxError:0,changed:false,resolved:false};
     setBrief(false);setPostOpen(false);setResolved(false);setBaselineMetrics(null);setResolution(null);setConnectMode(false);setConnectSource(null);setSandboxExport(false);
@@ -105,7 +111,7 @@ export default function App() {
       if(e.key>='1'&&e.key<='5'){reset(incidents[Number(e.key)-1].id,seed);return;}
       if(e.key.toLowerCase()==='s'){reset(sandbox.id,seed);return;}
       if(e.key.toLowerCase()==='r'){
-        if(id===sandbox.id){world.current=makeWorld(id,seed,topology);setSnapshot(world.current.simulator.getSnapshot());setHistory([]);setGeneration(value=>value+1);setSelected(null);setConnectMode(false);setConnectSource(null);setSandboxExport(false);}
+        if(id===sandbox.id){world.current=makeWorld(id,seed,topology);setSnapshot(world.current.simulator.getSnapshot());setHistory([]);setGeneration(value=>value+1);setSelected(primaryNode(topology));setConnectMode(false);setConnectSource(null);setSandboxExport(false);}
         else reset(id,seed);
       }
     };
@@ -168,8 +174,8 @@ export default function App() {
   const copyShare=async()=>{try{await navigator.clipboard.writeText(shareUrl());flash('Share URL copied.');}catch{flash('Copy failed. Open the resilience pack to select the URL.');setSandboxExport(true);}};
   const scenario=world.current.scenario;
   return <div className="app">
-    <TopControlBar id={id} onScenario={next=>reset(next,seed)} playing={playing} onPlay={()=>setPlaying(p=>!p)} speed={speed} onSpeed={setSpeed} seed={seed} onSeed={value=>reset(id,Number.isFinite(value)?value:0)} onReset={()=>{if(id===sandbox.id){world.current=makeWorld(id,seed,topology);setSnapshot(world.current.simulator.getSnapshot());setHistory([]);setGeneration(value=>value+1);setSelected(null);setConnectMode(false);setConnectSource(null);setSandboxExport(false);}else reset(id,seed);}} onBrief={()=>setBrief(true)} hasIncident={!!world.current.scenario} snapshot={snapshot}/>
-    <div className="workspace"><main className="main"><div className="mission"><div><span className="incident-tag">{scenario?'● SEV-1 INCIDENT':'● SANDBOX'}</span><span className="mission-id">{scenario?'INCIDENT / '+String(incidents.findIndex(s=>s.id===id)+1).padStart(2,'0'):'FREE BUILD'}</span><h1>{scenario?.name??sandbox.name}</h1><p>{scenario?.symptomSummary??'Explore the starter topology and tune node configuration.'}</p></div><div className="mission-actions"><button onClick={()=>setBrief(true)} disabled={!scenario}>☷ &nbsp; Brief / Hints</button>{!scenario&&<><button onClick={()=>setSandboxExport(true)}>Resilience pack</button><button onClick={copyShare}>Copy share URL</button></>}</div></div>
+    <TopControlBar id={id} onScenario={next=>reset(next,seed)} playing={playing} onPlay={()=>setPlaying(p=>!p)} speed={speed} onSpeed={setSpeed} seed={seed} onSeed={value=>reset(id,Number.isFinite(value)?value:0)} onReset={()=>{if(id===sandbox.id){world.current=makeWorld(id,seed,topology);setSnapshot(world.current.simulator.getSnapshot());setHistory([]);setGeneration(value=>value+1);setSelected(primaryNode(topology));setConnectMode(false);setConnectSource(null);setSandboxExport(false);}else reset(id,seed);}} onExport={()=>scenario?setPostOpen(true):setSandboxExport(true)} snapshot={snapshot}/>
+    <div className="workspace"><main className="main"><div className="mission"><div className="mission-copy"><span className="incident-tag">{scenario?'● SEV-1 INCIDENT':'● SANDBOX'}</span><span className="mission-id">{scenario?'INCIDENT / '+String(incidents.findIndex(s=>s.id===id)+1).padStart(2,'0'):'FREE BUILD'}</span><h1>{scenario?.name??sandbox.name}</h1><p>{scenario?.symptomSummary??'Explore the starter topology and tune node configuration.'}</p></div><div className="mission-actions"><button onClick={()=>setBrief(true)} disabled={!scenario}>☷ &nbsp; Brief / Hints</button></div></div>
       {scenario && <div className={'resolution-banner '+(resolved?'resolved':'')}>{resolved?<button onClick={()=>setPostOpen(true)}>✓ Incident resolved · View post-mortem</button>:<>SLA HOLD <b>{Math.max(0,scenario.slaTargets.holdDurationMs-(snapshot.sla?.healthyDurationMs??0))/1000}s</b> · BUDGET <b>{snapshot.sla?.remainingPercent.toFixed(1)}%</b></>}</div>}
       <ChaosToolbar topology={topology} selected={selected} faults={snapshot.activeFaults} inject={inject} clear={clearFault}/>
       {!scenario&&<div className="sandbox-bar"><span>ADD NODE</span>{(['traffic','gateway','service','cache','database','queue','external'] as NodeType[]).map(type=><button key={type} onClick={()=>addNode(type)}>{type}</button>)}<button className={connectMode?'active':''} onClick={()=>{setConnectMode(!connectMode);setConnectSource(null);}}>{connectMode?(connectSource?'Choose target':'Choose source'):'Connect mode'}</button>{selected&&<button className="delete-node" onClick={removeNode}>Delete node</button>}</div>}
@@ -178,14 +184,20 @@ export default function App() {
       <TelemetryDock key={generation} history={history} snapshot={snapshot} topology={topology} target={scenario?.slaTargets.p99LatencyMs} collapsed={dockCollapsed} toggle={()=>setDockCollapsed(v=>!v)}/>
     </main><NodeInspector edges={topology.edges} node={topology.nodes.find(n=>n.id===selected)} snapshot={snapshot} collapsed={sideCollapsed} toggle={()=>setSideCollapsed(v=>!v)} update={update}/></div>
     {!scenario&&selected&&<div className="edge-editor"><b>Connections · {selected}</b>{topology.edges.filter(e=>e.sourceNodeId===selected||e.targetNodeId===selected).map(e=><button key={e.id} onClick={()=>removeEdge(e.id)} title="Disconnect edge">{e.sourceNodeId} → {e.targetNodeId} ×</button>)}</div>}
-    {sandboxExport&&<div className="modal-backdrop" onClick={()=>setSandboxExport(false)}><section className="modal postmortem" role="dialog" aria-modal="true" aria-label="Sandbox resilience pack" onClick={e=>e.stopPropagation()}><div className="modal-head"><h2>Sandbox resilience pack</h2><button onClick={()=>setSandboxExport(false)}>×</button></div><p>Share URL</p><input className="share-input" readOnly value={shareUrl()}/><pre>{generateResiliencePack(topology)}</pre><button className="action-button" onClick={()=>navigator.clipboard.writeText(generateResiliencePack(topology)).then(()=>flash('Pack copied.')).catch(()=>flash('Copy failed.'))}>Copy pack</button></section></div>}
+    {sandboxExport&&<div className="modal-backdrop" onClick={()=>setSandboxExport(false)}><section className="modal postmortem" role="dialog" aria-modal="true" aria-label="Sandbox resilience pack" onClick={e=>e.stopPropagation()}><div className="modal-head"><h2>Export / Share</h2><button onClick={()=>setSandboxExport(false)}>×</button></div>{scenario&&baselineMetrics&&resolution&&<button className="action-button" onClick={()=>{setSandboxExport(false);setPostOpen(true);}}>Open post-mortem</button>}{scenario&&!resolution&&<p>Post-mortem will be available once the incident is resolved.</p>}<p>Share URL</p><input className="share-input" readOnly value={shareUrl()}/><pre>{generateResiliencePack(topology)}</pre><button className="action-button" onClick={copyShare}>Copy share URL</button> <button className="action-button" onClick={()=>navigator.clipboard.writeText(generateResiliencePack(topology)).then(()=>flash('Pack copied.')).catch(()=>flash('Copy failed.'))}>Copy pack</button></section></div>}
     {brief&&scenario&&<IncidentBriefModal key={scenario.id} scenario={scenario} close={()=>setBrief(false)}/>}
-    {postOpen&&scenario&&baselineMetrics&&resolution&&(()=>{
-      const before={...baselineMetrics.global,remainingBudget:baselineMetrics.sla?.remainingPercent??0};
-      const after={...resolution.global,remainingBudget:resolution.sla?.remainingPercent??0};
+    {postOpen&&scenario&&(()=>{
+      const observed = baselineMetrics ?? outage.current.peak;
+      const beforeSnapshot = observed ?? snapshot;
+      const afterSnapshot = resolution ?? snapshot;
+      const before={...beforeSnapshot.global,
+        p99: baselineMetrics ? beforeSnapshot.global.p99 : outage.current.peak ? outage.current.maxP99 : beforeSnapshot.global.p99,
+        errorRate: baselineMetrics ? beforeSnapshot.global.errorRate : outage.current.peak ? outage.current.maxError : beforeSnapshot.global.errorRate,
+        remainingBudget:beforeSnapshot.sla?.remainingPercent??0};
+      const after={...afterSnapshot.global,remainingBudget:afterSnapshot.sla?.remainingPercent??0};
       const markdown=generatePostMortemMarkdown({title:scenario.name,symptoms:scenario.brief+' '+scenario.symptomSummary,before,after,baseline:baselineTopology.current,current:topology,takeaways:scenario.canonicalFixHints});
       const hash=encodeStateToHash({topology,seed,scenarioId:id});
-      return <PostMortemModal markdown={markdown} pack={generateResiliencePack(topology)} shareUrl={window.location.href.split('#')[0]+hash} before={before} after={after} close={()=>setPostOpen(false)}/>;
+      return <PostMortemModal resolved={resolved} markdown={markdown} pack={generateResiliencePack(topology)} shareUrl={window.location.href.split('#')[0]+hash} before={before} after={after} close={()=>setPostOpen(false)}/>;
     })()}
     <footer><span><i className="green"/> SIMULATION {playing?'RUNNING':'PAUSED'} <b>·</b> {speed}× SPEED</span><span className="footer-right">LOGICAL TIME &nbsp; <b>{(snapshot.nowMs/1000).toFixed(1)}s</b> &nbsp;&nbsp; <span>SPACE</span> pause &nbsp; <span>R</span> reset</span></footer>
   </div>;

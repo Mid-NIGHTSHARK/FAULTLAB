@@ -92,7 +92,16 @@ export function TopologyCanvas({ topology, snapshot, selected, onSelect, editabl
         ctx.fillStyle = '#e2e8f0'; ctx.font = 'bold 13px sans-serif'; ctx.fillText(node.name.slice(0,19),node.x-62,node.y-10);
         ctx.fillStyle = '#94a3b8'; ctx.font = '11px monospace'; ctx.fillText(`${m.activeWorkers}/${capacity} workers`,node.x-62,node.y+13);
         ctx.fillStyle = '#1e293b'; ctx.fillRect(node.x-62,node.y+27,124,5); ctx.fillStyle = color; ctx.fillRect(node.x-62,node.y+27,124*Math.min(1,m.queueDepth/Math.max(1,node.maxQueueSize)),5);
-        ctx.beginPath(); ctx.strokeStyle = color; ctx.lineWidth = 3; ctx.arc(node.x+57,node.y-34,7,-Math.PI/2,-Math.PI/2+Math.PI*2*Math.max(.04,ratio)); ctx.stroke();
+        ctx.beginPath(); ctx.strokeStyle = '#1F2937'; ctx.lineWidth = 3;
+        ctx.arc(node.x+57,node.y-34,12,0,Math.PI*2); ctx.stroke();
+        if (ratio > 0) {
+          ctx.beginPath(); ctx.strokeStyle = color;
+          ctx.arc(node.x+57,node.y-34,12,-Math.PI/2,-Math.PI/2+Math.PI*2*ratio); ctx.stroke();
+        }
+        ctx.fillStyle = '#e2e8f0'; ctx.font = 'bold 8px monospace';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(`${Math.round(ratio*100)}%`,node.x+57,node.y-34);
+        ctx.textAlign = 'start'; ctx.textBaseline = 'alphabetic';
         if (m.circuitState !== 'closed') { ctx.fillStyle = '#ef4444'; ctx.font = 'bold 10px monospace'; ctx.fillText(m.circuitState.toUpperCase().replace('_','-'),node.x-62,node.y+47); }
       }
       frame = requestAnimationFrame(draw);
