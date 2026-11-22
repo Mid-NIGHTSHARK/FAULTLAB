@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 540" role="img" aria-labelledby="title desc">
+  <title id="title">FaultLab architecture</title>
+  <desc id="desc">The scenario layer feeds the pure simulation kernel. The mission-control UI controls the kernel and displays telemetry. Vitest verifies the system.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L8 4L0 8Z" fill="#64748b"/></marker>
+    <style>
+      .bg{fill:#0b0f17}.panel{fill:#111827;stroke:#1f2937;stroke-width:1.5}
+      .card{fill:#0b1420;stroke:#273548;stroke-width:1}.line{fill:none;stroke:#64748b;stroke-width:1.5;marker-end:url(#arrow)}
+      .title{font:700 23px system-ui,sans-serif;fill:#f1f5f9}.sub{font:12px system-ui,sans-serif;fill:#94a3b8}
+      .label{font:700 11px system-ui,sans-serif;letter-spacing:1.4px}.name{font:700 13px system-ui,sans-serif;fill:#e2e8f0}
+      .body{font:11px system-ui,sans-serif;fill:#aabbd0}.mono{font:11px ui-monospace,monospace;fill:#cbd5e1}
+    </style>
+  </defs>
+  <rect class="bg" width="1100" height="540" rx="14"/>
+  <text x="30" y="38" class="title">FaultLab architecture</text>
+  <text x="30" y="58" class="sub">Deterministic simulation · live incident response · static browser app</text>
+
+  <rect x="25" y="80" width="230" height="330" rx="10" class="panel"/>
+  <text x="43" y="106" class="label" fill="#a855f7">SCENARIO LAYER</text>
+  <text x="43" y="126" class="mono">src/scenarios/</text>
+  <rect x="41" y="144" width="198" height="138" rx="7" class="card"/>
+  <text x="54" y="165" class="name">5 SEV-1 incidents</text>
+  <text x="54" y="185" class="body">Tatkal · cache expiry herd</text>
+  <text x="54" y="204" class="body">UPI · retry storm</text>
+  <text x="54" y="223" class="body">Diwali · pool exhaustion</text>
+  <text x="54" y="242" class="body">Merchant · hot shard</text>
+  <text x="54" y="261" class="body">Quick-commerce · queue</text>
+  <rect x="41" y="294" width="198" height="67" rx="7" class="card"/>
+  <text x="54" y="316" class="name">Free-Build Sandbox</text>
+  <text x="54" y="336" class="body">Editable DAG + seeded traffic</text>
+  <text x="43" y="392" class="body">Topology, faults, SLA and fixes</text>
+
+  <rect x="285" y="80" width="425" height="330" rx="10" class="panel"/>
+  <text x="303" y="106" class="label" fill="#10b981">PURE ZERO-DOM KERNEL</text>
+  <text x="303" y="126" class="mono">src/engine/</text>
+  <rect x="302" y="144" width="113" height="67" rx="7" class="card"/>
+  <text x="315" y="166" class="name">prng.ts</text>
+  <text x="315" y="185" class="body">Mulberry32</text>
+  <rect x="444" y="144" width="248" height="135" rx="7" class="card"/>
+  <text x="458" y="166" class="name">simulator.ts</text>
+  <text x="458" y="185" class="body">Discrete-event queue · rate limiter</text>
+  <text x="458" y="203" class="body">Circuit breaker · cache + singleflight</text>
+  <text x="458" y="221" class="body">Sharded pools · retries</text>
+  <text x="458" y="252" class="body">Logical time · live configuration</text>
+  <path class="line" d="M416 177H438"/>
+  <rect x="302" y="305" width="173" height="67" rx="7" class="card"/>
+  <text x="315" y="327" class="name">metrics.ts + tracer.ts</text>
+  <text x="315" y="346" class="body">SLA budget · bounded traces</text>
+  <rect x="511" y="305" width="181" height="86" rx="7" class="card"/>
+  <text x="524" y="327" class="name">exporter.ts</text>
+  <text x="524" y="346" class="body">Post-mortem · URL hash</text>
+  <text x="524" y="364" class="body">Nginx / Envoy / Redis pack</text>
+  <path class="line" d="M515 280V292H388V299"/>
+  <path class="line" d="M476 338H505"/>
+
+  <rect x="740" y="80" width="335" height="330" rx="10" class="panel"/>
+  <text x="758" y="106" class="label" fill="#06b6d4">MISSION-CONTROL UI</text>
+  <text x="758" y="126" class="mono">src/ui/</text>
+  <rect x="756" y="144" width="303" height="67" rx="7" class="card"/>
+  <text x="769" y="166" class="name">TopologyCanvas · 60fps</text>
+  <text x="769" y="185" class="body">Bounded outcome-colored particles</text>
+  <rect x="756" y="220" width="303" height="47" rx="7" class="card"/>
+  <text x="769" y="240" class="name">NodeInspector</text>
+  <text x="769" y="256" class="body">Live configuration updates</text>
+  <rect x="756" y="276" width="303" height="67" rx="7" class="card"/>
+  <text x="769" y="298" class="name">TelemetryDock</text>
+  <text x="769" y="317" class="body">p50 / p95 / p99 · shard heatmap</text>
+  <text x="769" y="333" class="body">Trace waterfall</text>
+  <rect x="756" y="352" width="303" height="39" rx="7" class="card"/>
+  <text x="769" y="376" class="body">ChaosToolbar · PostMortemModal</text>
+  <path class="line" d="M256 211H279"/>
+  <path class="line" d="M711 211H734"/>
+
+  <rect x="25" y="428" width="1050" height="84" rx="10" class="panel"/>
+  <rect x="42" y="446" width="5" height="47" rx="2" fill="#f59e0b"/>
+  <text x="61" y="454" class="label" fill="#f59e0b">VERIFICATION GATE</text>
+  <text x="61" y="479" class="name">test/ · 100 Vitest tests</text>
+  <text x="322" y="479" class="body">Deterministic invariants · rolling metrics · exporter · topology · headless incident recovery</text>
+  <circle cx="1039" cy="469" r="5" fill="#ef4444"/>
+</svg>
