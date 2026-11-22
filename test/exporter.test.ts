@@ -15,6 +15,15 @@ describe('exporter', () => {
     'rejects malformed state %s', hash => expect(decodeStateFromHash(hash)).toBeNull(),
   );
 
+  it('rejects unknown node types, invalid configs, dangling edges and cycles', () => {
+    const encode = (topology: typeof sandbox) => encodeStateToHash({topology, seed: 1});
+    expect(decodeStateFromHash(encode({...sandbox, nodes: sandbox.nodes.map((node,i)=>i===0?{...node,type:'alien' as typeof node.type}:node)}))).toBeNull();
+    expect(decodeStateFromHash(encode({...sandbox, edges:[...sandbox.edges,{id:'dangling',sourceNodeId:'db',targetNodeId:'missing'}]}))).toBeNull();
+    expect(decodeStateFromHash(encode({...sandbox, edges:[...sandbox.edges,{id:'cycle',sourceNodeId:'db',targetNodeId:'traffic'}]}))).toBeNull();
+    expect(decodeStateFromHash(encode({...sandbox, nodes:sandbox.nodes.map((node,i)=>i===0?{...node,workerPoolCapacity:-1}:node)}))).toBeNull();
+    expect(decodeStateFromHash(encode({...sandbox, nodes:sandbox.nodes.map((node,i)=>i===0?{...node,sharding:{...node.sharding,shardCount:100_000_000}}:node)}))).toBeNull();
+  });
+
   it('reports real before and after metrics and exact configuration changes', () => {
     const current = { ...sandbox, nodes: sandbox.nodes.map(node => node.id === 'redis'
       ? { ...node, cache: { ...node.cache, singleflight: false, ttlJitterPercent: 42 } } : node) };

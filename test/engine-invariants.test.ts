@@ -512,3 +512,20 @@ describe('cache, shards and live faults', () => {
     expect(averageTickMs).toBeLessThan(12);
   });
 });
+
+describe('long-running simulation', () => {
+  it('keeps zero-traffic and complete-failure metrics finite after ten logical minutes', () => {
+    const s = sim([source(0), node('svc', 'service')]);
+    const initial = s.getSnapshot();
+    expect(Object.values(initial.global).filter(value => typeof value === 'number').every(Number.isFinite)).toBe(true);
+    s.updateNodeConfig('in', { trafficRps: 100 });
+    s.injectFault(fault('node_crash', 'svc', {}, 0, 610_000));
+    let final = initial;
+    for (let tick = 0; tick < 6_000; tick++) [final] = s.step();
+    expect(final.nowMs).toBe(600_000);
+    expect(final.global.errorRate).toBe(1);
+    expect(final.recentTraces.length).toBeLessThanOrEqual(200);
+    expect(final.edgeTraversals.length).toBeLessThanOrEqual(128);
+    expect(Object.values(final.global).filter(value => typeof value === 'number').every(Number.isFinite)).toBe(true);
+  }, 15_000);
+});

@@ -66,7 +66,7 @@ export class RollingMetrics {
     const percentile = (percent: number) => latencies[Math.ceil((percent * count) / 100) - 1] ?? 0;
     return {
       ...gauges,
-      rps: (count / this.windowMs) * 1_000,
+      rps: count ? Math.min(Number.MAX_VALUE, (count / this.windowMs) * 1_000) : 0,
       errorRate: count ? errors / count : 0,
       p50: percentile(50),
       p95: percentile(95),

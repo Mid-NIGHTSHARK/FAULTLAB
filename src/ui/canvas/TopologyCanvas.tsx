@@ -13,6 +13,16 @@ interface Props {
   onMove?: (id:string,x:number,y:number)=>void;
 }
 
+function geometry(rect: DOMRect, topology: ScenarioTopology, zoom: number) {
+  const xs=topology.nodes.map(node=>node.x), ys=topology.nodes.map(node=>node.y);
+  const minX=xs.length?Math.min(...xs):0, maxX=xs.length?Math.max(...xs):1000;
+  const minY=ys.length?Math.min(...ys):0, maxY=ys.length?Math.max(...ys):560;
+  const centerX=(minX+maxX)/2, centerY=(minY+maxY)/2;
+  const scale=Math.max(0.01,Math.min((rect.width-80)/Math.max(250,maxX-minX+180),
+    (rect.height-80)/Math.max(200,maxY-minY+150),1.2))*zoom;
+  return {scale,centerX,centerY};
+}
+
 export function TopologyCanvas({ topology, snapshot, selected, onSelect, editable, connectMode, onMove }: Props) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const latest = useRef({ topology, snapshot, selected, onSelect });
@@ -38,9 +48,9 @@ export function TopologyCanvas({ topology, snapshot, selected, onSelect, editabl
       }
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, rect.width, rect.height);
-      const scale = Math.min((rect.width - 100) / 1000, (rect.height - 70) / 560) * view.current.zoom;
-      const ox = rect.width / 2 - 500 * scale + view.current.x;
-      const oy = rect.height / 2 - 280 * scale + view.current.y;
+      const {scale,centerX,centerY} = geometry(rect,topology,view.current.zoom);
+      const ox = rect.width / 2 - centerX * scale + view.current.x;
+      const oy = rect.height / 2 - centerY * scale + view.current.y;
       ctx.translate(ox, oy); ctx.scale(scale, scale);
       const nodes = new Map(topology.nodes.map((node) => [node.id, node]));
       if (snapshot.nowMs !== seen.current) {
@@ -94,9 +104,9 @@ export function TopologyCanvas({ topology, snapshot, selected, onSelect, editabl
     <canvas ref={canvas} aria-label="Interactive service topology" onWheel={(e) => { e.preventDefault(); view.current.zoom = Math.max(.45,Math.min(2.5,view.current.zoom * (e.deltaY > 0 ? .9 : 1.1))); }}
       onPointerDown={(e) => {
         const rect=e.currentTarget.getBoundingClientRect();
-        const scale=Math.min((rect.width-100)/1000,(rect.height-70)/560)*view.current.zoom;
-        const x=(e.clientX-rect.left-rect.width/2-view.current.x)/scale+500;
-        const y=(e.clientY-rect.top-rect.height/2-view.current.y)/scale+280;
+        const {scale,centerX,centerY}=geometry(rect,topology,view.current.zoom);
+        const x=(e.clientX-rect.left-rect.width/2-view.current.x)/scale+centerX;
+        const y=(e.clientY-rect.top-rect.height/2-view.current.y)/scale+centerY;
         const hit=topology.nodes.find(n=>Math.abs(n.x-x)<76&&Math.abs(n.y-y)<55);
         drag.current={x:e.clientX,y:e.clientY,moved:false,nodeId:editable&&!connectMode?hit?.id:undefined};
         e.currentTarget.setPointerCapture(e.pointerId);
@@ -107,7 +117,7 @@ export function TopologyCanvas({ topology, snapshot, selected, onSelect, editabl
         if (Math.abs(dx)+Math.abs(dy)>1) drag.current.moved=true;
         if(drag.current.nodeId && onMove) {
           const rect=e.currentTarget.getBoundingClientRect();
-          const scale=Math.min((rect.width-100)/1000,(rect.height-70)/560)*view.current.zoom;
+          const {scale}=geometry(rect,topology,view.current.zoom);
           const node=topology.nodes.find(n=>n.id===drag.current?.nodeId);
           if(node) onMove(node.id,Math.max(76,Math.min(924,node.x+dx/scale)),Math.max(55,Math.min(505,node.y+dy/scale)));
         } else {view.current.x+=dx;view.current.y+=dy;}
@@ -116,9 +126,9 @@ export function TopologyCanvas({ topology, snapshot, selected, onSelect, editabl
       onPointerUp={(e) => {
         if (drag.current && !drag.current.moved) {
           const rect=e.currentTarget.getBoundingClientRect();
-          const scale=Math.min((rect.width-100)/1000,(rect.height-70)/560)*view.current.zoom;
-          const x=(e.clientX-rect.left-rect.width/2-view.current.x)/scale+500;
-          const y=(e.clientY-rect.top-rect.height/2-view.current.y)/scale+280;
+          const {scale,centerX,centerY}=geometry(rect,topology,view.current.zoom);
+          const x=(e.clientX-rect.left-rect.width/2-view.current.x)/scale+centerX;
+          const y=(e.clientY-rect.top-rect.height/2-view.current.y)/scale+centerY;
           const hit=topology.nodes.find(n=>Math.abs(n.x-x)<76&&Math.abs(n.y-y)<55);
           if(hit) onSelect(hit.id);
         }

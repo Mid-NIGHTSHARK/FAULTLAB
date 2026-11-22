@@ -41,6 +41,7 @@ export default function App() {
   const world=useRef(initial.current.world);
   const [topology,setTopology]=useState(world.current.topology);
   const [snapshot,setSnapshot]=useState(world.current.simulator.getSnapshot());
+  const [generation,setGeneration]=useState(0);
   const [history,setHistory]=useState<TickSnapshot[]>([]);
   const [selected,setSelected]=useState<string|null>(null);
   const [sideCollapsed,setSideCollapsed]=useState(false);
@@ -57,34 +58,40 @@ export default function App() {
   const outage=useRef<{peak:TickSnapshot | null; maxP99:number; maxError:number; changed:boolean; resolved:boolean}>({peak:null,maxP99:0,maxError:0,changed:false,resolved:false});
   const baselineTopology=useRef(world.current.scenario?.topology??world.current.topology);
   const [resolution,setResolution]=useState<TickSnapshot | null>(null);
+  const generationRef=useRef(0); generationRef.current=generation;
   const playingRef=useRef(playing); playingRef.current=playing;
   const speedRef=useRef(speed); speedRef.current=speed;
   const reset=useCallback((newId:string,newSeed:number)=>{
     world.current=makeWorld(newId,newSeed); setId(newId); setSeed(newSeed); setTopology(world.current.topology);
-    setSnapshot(world.current.simulator.getSnapshot()); setHistory([]); setSelected(null);
+    setSnapshot(world.current.simulator.getSnapshot()); setHistory([]); setSelected(null);setGeneration(value=>value+1);
     baselineTopology.current=world.current.scenario?.topology??world.current.topology;
     outage.current={peak:null,maxP99:0,maxError:0,changed:false,resolved:false};
     setBrief(false);setPostOpen(false);setResolved(false);setBaselineMetrics(null);setResolution(null);setConnectMode(false);setConnectSource(null);setSandboxExport(false);
   },[]);
   useEffect(()=>{
-    let frame=0,last=performance.now(),acc=0;
+    let frame=0,last=performance.now(),acc=0, seenGeneration=generationRef.current;
     const loop=(now:number)=>{
       const elapsed=Math.min(now-last,250); last=now;
+      if(seenGeneration!==generationRef.current){acc=0;seenGeneration=generationRef.current;}
       if(playingRef.current){ acc+=elapsed*speedRef.current; if(acc>=100){const ticks=world.current.simulator.step(Math.floor(acc/100)*100); acc%=100; if(ticks.length){
         const scenario=world.current.scenario;
         for(const tick of ticks) {
           const tracker=outage.current;
-          if(scenario && !tracker.changed) {
+          if(scenario && !tracker.resolved &&
+            (tick.global.p99>scenario.slaTargets.p99LatencyMs ||
+             tick.global.errorRate*100>scenario.slaTargets.maxErrorRatePct)) {
             tracker.peak=tick;
             tracker.maxP99=Math.max(tracker.maxP99,tick.global.p99);
             tracker.maxError=Math.max(tracker.maxError,tick.global.errorRate);
           }
-          if(scenario && tracker.changed && !tracker.resolved && tick.sla && tick.sla.remainingPercent>0 &&
+          if(scenario && tracker.changed && tracker.peak && !tracker.resolved && tick.sla && tick.sla.remainingPercent>0 &&
             tick.sla.healthyDurationMs>=scenario.slaTargets.holdDurationMs) {
-            tracker.resolved=true;setResolved(true);setPostOpen(true);setResolution(tick);
+            tracker.resolved=true;
+            setBaselineMetrics({...tracker.peak,global:{...tracker.peak.global,p99:tracker.maxP99,errorRate:tracker.maxError}});
+            setResolved(true);setPostOpen(true);setResolution(tick);
           }
         }
-        setSnapshot(ticks[ticks.length-1]);setHistory(h=>[...h,...ticks].slice(-600));
+        setSnapshot(ticks[ticks.length-1]);setHistory(h=>[...h,...ticks.map(tick=>({...tick,nodes:{},circuits:{},activeFaults:[],recentTraces:[],edgeTraversals:[]}))].slice(-600));
       }} }
       frame=requestAnimationFrame(loop);
     };
@@ -98,7 +105,7 @@ export default function App() {
       if(e.key>='1'&&e.key<='5'){reset(incidents[Number(e.key)-1].id,seed);return;}
       if(e.key.toLowerCase()==='s'){reset(sandbox.id,seed);return;}
       if(e.key.toLowerCase()==='r'){
-        if(id===sandbox.id){world.current=makeWorld(id,seed,topology);setSnapshot(world.current.simulator.getSnapshot());setHistory([]);}
+        if(id===sandbox.id){world.current=makeWorld(id,seed,topology);setSnapshot(world.current.simulator.getSnapshot());setHistory([]);setGeneration(value=>value+1);setSelected(null);setConnectMode(false);setConnectSource(null);setSandboxExport(false);}
         else reset(id,seed);
       }
     };
@@ -106,10 +113,6 @@ export default function App() {
   },[id,seed,reset,topology]);
   const update=(patch:NodeConfigPatch)=>{
     if(!selected)return;
-    if (!outage.current.changed && outage.current.peak) {
-      const peak=outage.current.peak;
-      setBaselineMetrics({...peak,global:{...peak.global,p99:outage.current.maxP99,errorRate:outage.current.maxError}});
-    }
     outage.current.changed=true;
     world.current.simulator.updateNodeConfig(selected,patch);
     setTopology(t=>({...t,nodes:t.nodes.map(n=>n.id===selected?{...n,...patch,
@@ -120,7 +123,7 @@ export default function App() {
   };
   const rebuild=(next:ScenarioTopology)=>{
     world.current=makeWorld(sandbox.id,seed,next);
-    setTopology(next);setSnapshot(world.current.simulator.getSnapshot());setHistory([]);
+    setTopology(next);setSnapshot(world.current.simulator.getSnapshot());setHistory([]);setGeneration(value=>value+1);
   };
   const flash=(message:string)=>{setToast(message);window.setTimeout(()=>setToast(''),2500);};
   const addNode=(type:NodeType)=>{
@@ -165,14 +168,14 @@ export default function App() {
   const copyShare=async()=>{try{await navigator.clipboard.writeText(shareUrl());flash('Share URL copied.');}catch{flash('Copy failed. Open the resilience pack to select the URL.');setSandboxExport(true);}};
   const scenario=world.current.scenario;
   return <div className="app">
-    <TopControlBar id={id} onScenario={next=>reset(next,seed)} playing={playing} onPlay={()=>setPlaying(p=>!p)} speed={speed} onSpeed={setSpeed} seed={seed} onSeed={value=>reset(id,Number.isFinite(value)?value:0)} onReset={()=>{if(id===sandbox.id){world.current=makeWorld(id,seed,topology);setSnapshot(world.current.simulator.getSnapshot());setHistory([]);}else reset(id,seed);}} onBrief={()=>setBrief(true)} hasIncident={!!world.current.scenario} snapshot={snapshot}/>
+    <TopControlBar id={id} onScenario={next=>reset(next,seed)} playing={playing} onPlay={()=>setPlaying(p=>!p)} speed={speed} onSpeed={setSpeed} seed={seed} onSeed={value=>reset(id,Number.isFinite(value)?value:0)} onReset={()=>{if(id===sandbox.id){world.current=makeWorld(id,seed,topology);setSnapshot(world.current.simulator.getSnapshot());setHistory([]);setGeneration(value=>value+1);setSelected(null);setConnectMode(false);setConnectSource(null);setSandboxExport(false);}else reset(id,seed);}} onBrief={()=>setBrief(true)} hasIncident={!!world.current.scenario} snapshot={snapshot}/>
     <div className="workspace"><main className="main"><div className="mission"><div><span className="incident-tag">{scenario?'● SEV-1 INCIDENT':'● SANDBOX'}</span><span className="mission-id">{scenario?'INCIDENT / '+String(incidents.findIndex(s=>s.id===id)+1).padStart(2,'0'):'FREE BUILD'}</span><h1>{scenario?.name??sandbox.name}</h1><p>{scenario?.symptomSummary??'Explore the starter topology and tune node configuration.'}</p></div><div className="mission-actions"><button onClick={()=>setBrief(true)} disabled={!scenario}>☷ &nbsp; Brief / Hints</button>{!scenario&&<><button onClick={()=>setSandboxExport(true)}>Resilience pack</button><button onClick={copyShare}>Copy share URL</button></>}</div></div>
       {scenario && <div className={'resolution-banner '+(resolved?'resolved':'')}>{resolved?<button onClick={()=>setPostOpen(true)}>✓ Incident resolved · View post-mortem</button>:<>SLA HOLD <b>{Math.max(0,scenario.slaTargets.holdDurationMs-(snapshot.sla?.healthyDurationMs??0))/1000}s</b> · BUDGET <b>{snapshot.sla?.remainingPercent.toFixed(1)}%</b></>}</div>}
       <ChaosToolbar topology={topology} selected={selected} faults={snapshot.activeFaults} inject={inject} clear={clearFault}/>
       {!scenario&&<div className="sandbox-bar"><span>ADD NODE</span>{(['traffic','gateway','service','cache','database','queue','external'] as NodeType[]).map(type=><button key={type} onClick={()=>addNode(type)}>{type}</button>)}<button className={connectMode?'active':''} onClick={()=>{setConnectMode(!connectMode);setConnectSource(null);}}>{connectMode?(connectSource?'Choose target':'Choose source'):'Connect mode'}</button>{selected&&<button className="delete-node" onClick={removeNode}>Delete node</button>}</div>}
       {toast&&<div className="toast" role="status">{toast}</div>}
       <TopologyCanvas topology={topology} snapshot={snapshot} selected={selected} onSelect={selectNode} editable={!scenario} connectMode={connectMode} onMove={(nodeId,x,y)=>setTopology(t=>({...t,nodes:t.nodes.map(n=>n.id===nodeId?{...n,x,y}:n)}))}/>
-      <TelemetryDock history={history} snapshot={snapshot} topology={topology} target={scenario?.slaTargets.p99LatencyMs} collapsed={dockCollapsed} toggle={()=>setDockCollapsed(v=>!v)}/>
+      <TelemetryDock key={generation} history={history} snapshot={snapshot} topology={topology} target={scenario?.slaTargets.p99LatencyMs} collapsed={dockCollapsed} toggle={()=>setDockCollapsed(v=>!v)}/>
     </main><NodeInspector edges={topology.edges} node={topology.nodes.find(n=>n.id===selected)} snapshot={snapshot} collapsed={sideCollapsed} toggle={()=>setSideCollapsed(v=>!v)} update={update}/></div>
     {!scenario&&selected&&<div className="edge-editor"><b>Connections · {selected}</b>{topology.edges.filter(e=>e.sourceNodeId===selected||e.targetNodeId===selected).map(e=><button key={e.id} onClick={()=>removeEdge(e.id)} title="Disconnect edge">{e.sourceNodeId} → {e.targetNodeId} ×</button>)}</div>}
     {sandboxExport&&<div className="modal-backdrop" onClick={()=>setSandboxExport(false)}><section className="modal postmortem" role="dialog" aria-modal="true" aria-label="Sandbox resilience pack" onClick={e=>e.stopPropagation()}><div className="modal-head"><h2>Sandbox resilience pack</h2><button onClick={()=>setSandboxExport(false)}>×</button></div><p>Share URL</p><input className="share-input" readOnly value={shareUrl()}/><pre>{generateResiliencePack(topology)}</pre><button className="action-button" onClick={()=>navigator.clipboard.writeText(generateResiliencePack(topology)).then(()=>flash('Pack copied.')).catch(()=>flash('Copy failed.'))}>Copy pack</button></section></div>}

@@ -85,7 +85,7 @@ class Arrivals {
       this.head = 0;
     }
     return {
-      rps: ((this.entries.length - this.head) / period) * 1_000,
+      rps: Math.min(Number.MAX_VALUE, ((this.entries.length - this.head) / period) * 1_000),
       perShardLoad: Array.from({ length: shardCount }, (_, index) => this.shards[index] ?? 0),
     };
   }

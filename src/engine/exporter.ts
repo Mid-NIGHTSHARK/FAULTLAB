@@ -1,4 +1,5 @@
 import type { TickMetrics, Topology } from './types';
+import { createSimulator } from './simulator';
 
 export interface SharedState {
   topology: Topology;
@@ -154,6 +155,29 @@ export function decodeStateFromHash(hash: string): SharedState | null {
     if (item.topology.nodes.some(n => !n || typeof n.id !== 'string' || typeof n.type !== 'string' ||
       !n.retryPolicy || !n.circuitBreaker || !n.cache || !n.rateLimiter || !n.sharding) ||
       item.topology.edges.some(e => !e || typeof e.id !== 'string' || typeof e.sourceNodeId !== 'string' || typeof e.targetNodeId !== 'string')) return null;
+    const nodeTypes = new Set(['traffic', 'gateway', 'service', 'cache', 'database', 'queue', 'external']);
+    const retryTypes = new Set(['none', 'fixed', 'exponential_jitter']);
+    const ids = new Set<string>();
+    if (item.topology.nodes.length > 200 || item.topology.edges.length > 2_000) return null;
+    for (const node of item.topology.nodes) {
+      if (!node.id || ids.has(node.id) || !nodeTypes.has(node.type) || !retryTypes.has(node.retryPolicy.strategy) ||
+          typeof node.name !== 'string' ||
+          !Number.isSafeInteger(node.workerPoolCapacity) || node.workerPoolCapacity > 100_000 ||
+          !Number.isSafeInteger(node.maxQueueSize) || node.maxQueueSize > 100_000 ||
+          !Number.isSafeInteger(node.sharding.shardCount) || node.sharding.shardCount > 1_024 ||
+          (node.cache.keyCount !== undefined && (!Number.isSafeInteger(node.cache.keyCount) || node.cache.keyCount > 100_000)) ||
+          (node.cache.enabled !== undefined && typeof node.cache.enabled !== 'boolean') ||
+          typeof node.cache.singleflight !== 'boolean') return null;
+      ids.add(node.id);
+    }
+    const edgeIds = new Set<string>();
+    for (const edge of item.topology.edges) {
+      if (!edge.id || edgeIds.has(edge.id) || !ids.has(edge.sourceNodeId) || !ids.has(edge.targetNodeId) ||
+          (edge.required !== undefined && typeof edge.required !== 'boolean')) return null;
+      edgeIds.add(edge.id);
+    }
+    // The simulator validates all numeric configuration, edge overrides and DAG structure.
+    createSimulator(item.topology, { seed: item.seed! });
     return item as SharedState;
   } catch { return null; }
 }

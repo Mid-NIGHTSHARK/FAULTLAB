@@ -38,6 +38,18 @@ describe('rolling metrics', () => {
   });
 });
 
+describe('metric edge cases', () => {
+  it('keeps idle and fully failed windows finite, including tiny durations', () => {
+    const metrics = new RollingMetrics(Number.MIN_VALUE);
+    expect(Object.values(metrics.snapshot(0)).filter(value => typeof value === 'number').every(Number.isFinite)).toBe(true);
+    metrics.record({completedAtMs: 0, latencyMs: 0, failed:true, cacheOutcome:'miss'});
+    const result = metrics.snapshot(0);
+    expect(result.errorRate).toBe(1);
+    expect(result.cacheHitRate).toBe(0);
+    expect(Number.isFinite(result.rps)).toBe(true);
+  });
+});
+
 describe('SLA error budget', () => {
   const scenario = { slaTargets: { availability: 0.95, p95LatencyMs: 100 }, errorBudget: 0.2 };
   const healthy = { errorRate: 0.05, p95: 100 };
