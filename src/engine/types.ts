@@ -13,12 +13,18 @@ export interface CircuitBreakerConfig {
   failureThreshold: number;
   resetTimeoutMs: number;
   halfOpenMaxRequests: number;
+  /** Percentage in [0, 100]. Defaults to 50. */
+  errorThresholdPct?: number;
+  minSamples?: number;
+  openDurationMs?: number;
+  windowMs?: number;
 }
 
 export interface CacheConfig {
   ttlMs: number;
   ttlJitterPercent: number;
   singleflight: boolean;
+  keyCount?: number;
 }
 
 export interface RateLimiterConfig {
@@ -35,6 +41,10 @@ export interface NodeConfig {
   id: string;
   name: string;
   type: NodeType;
+  /** Offered load for traffic nodes. Defaults to rateLimiter.rps. */
+  trafficRps?: number;
+  serviceTimeSigma?: number;
+  saturationPenalty?: number;
   workerPoolCapacity: number;
   maxQueueSize: number;
   baseLatencyMs: number;
@@ -83,6 +93,7 @@ export interface TraceSpan {
   retryAttempt: number;
   status: TraceStatus;
   dropReason?: string;
+  statusCode?: number;
 }
 
 export interface RequestTrace {
@@ -90,6 +101,8 @@ export interface RequestTrace {
   startMs: number;
   durationMs: number;
   status: TraceStatus;
+  statusCode?: number;
+  dropReason?: string;
   spans: TraceSpan[];
 }
 

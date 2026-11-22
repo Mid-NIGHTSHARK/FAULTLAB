@@ -20,6 +20,7 @@ export class RollingMetrics {
   private observations: RequestObservation[] = [];
   private head = 0;
   private nowMs = 0;
+  private lastCache = { hits: 0, lookups: 0 };
 
   constructor(readonly windowMs: number, readonly shardCount = 0) {
     if (!positiveDuration(windowMs)) throw new RangeError('Expected a positive finite window');
@@ -58,6 +59,7 @@ export class RollingMetrics {
       if (observation.shardIndex !== undefined) perShardLoad[observation.shardIndex]++;
     }
 
+    this.lastCache = { hits: cacheHits, lookups: cacheLookups };
     latencies.sort((a, b) => a - b);
     const count = latencies.length;
     // Nearest-rank percentiles report an observed latency, including failed requests.
@@ -72,6 +74,11 @@ export class RollingMetrics {
       cacheHitRate: cacheLookups ? cacheHits / cacheLookups : 0,
       perShardLoad,
     };
+  }
+
+  /** Cache outcomes counted by the latest snapshot. */
+  cacheCounts(): Readonly<{ hits: number; lookups: number }> {
+    return this.lastCache;
   }
 
   private advance(nowMs: number): void {

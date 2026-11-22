@@ -2,7 +2,7 @@ const UINT32_RANGE = 0x100000000;
 
 export function createPrng(seed: number) {
   let state = seed >>> 0;
-  let zipfTable: { n: number; skew: number; cumulative: Float64Array } | undefined;
+  let zipfTable: { n: number; skew: number; quantile: (fraction: number) => number } | undefined;
 
   function nextUint32(): number {
     state = (state + 0x6d2b79f5) >>> 0;
@@ -49,17 +49,26 @@ export function createPrng(seed: number) {
     if (skew === 0) return nextInt(0, n - 1);
 
     if (zipfTable?.n !== n || zipfTable.skew !== skew) {
-      const cumulative = new Float64Array(n);
-      let total = 0;
-      for (let index = 0; index < n; index++) {
-        total += (index + 1) ** -skew;
-        cumulative[index] = total;
-      }
-      zipfTable = { n, skew, cumulative };
+      zipfTable = { n, skew, quantile: createZipfQuantile(n, skew) };
     }
+    return zipfTable.quantile(nextFloat());
+  }
 
-    const { cumulative } = zipfTable;
-    const sample = nextFloat() * cumulative[n - 1];
+  return { nextFloat, nextInt, nextExponential, nextLogNormal, nextZipf };
+}
+
+
+/** Build a reusable lookup from a uniform key fraction in [0, 1) to a Zipf rank. */
+export function createZipfQuantile(n: number, skew: number): (fraction: number) => number {
+  if (skew === 0) return (fraction) => Math.floor(fraction * n);
+  const cumulative = new Float64Array(n);
+  let total = 0;
+  for (let index = 0; index < n; index++) {
+    total += (index + 1) ** -skew;
+    cumulative[index] = total;
+  }
+  return (fraction) => {
+    const sample = fraction * total;
     let low = 0;
     let high = n - 1;
     while (low < high) {
@@ -68,7 +77,5 @@ export function createPrng(seed: number) {
       else low = mid + 1;
     }
     return low;
-  }
-
-  return { nextFloat, nextInt, nextExponential, nextLogNormal, nextZipf };
+  };
 }
