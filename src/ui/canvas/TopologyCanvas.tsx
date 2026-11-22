@@ -30,10 +30,11 @@ export function TopologyCanvas({ topology, snapshot, selected, onSelect, editabl
   const view = useRef({ zoom: 1, x: 0, y: 0 });
   const particles = useRef<Particle[]>([]);
   const seen = useRef(-1);
+  const load = useRef(new Map<string, { ratio: number; queue: number; warning: number }>());
   const drag = useRef<{ x: number; y: number; moved: boolean; nodeId?: string } | null>(null);
   const fit = () => { view.current = { zoom: 1, x: 0, y: 0 }; };
 
-  useEffect(() => { fit(); particles.current = []; seen.current = -1; }, [topology.id]);
+  useEffect(() => { fit(); particles.current = []; load.current.clear(); seen.current = -1; }, [topology.id]);
   useEffect(() => {
     const element = canvas.current!;
     const ctx = element.getContext('2d')!;
@@ -53,7 +54,9 @@ export function TopologyCanvas({ topology, snapshot, selected, onSelect, editabl
       const oy = rect.height / 2 - centerY * scale + view.current.y;
       ctx.translate(ox, oy); ctx.scale(scale, scale);
       const nodes = new Map(topology.nodes.map((node) => [node.id, node]));
-      if (snapshot.nowMs !== seen.current) {
+      const newTick = snapshot.nowMs !== seen.current;
+      if (snapshot.nowMs < seen.current) load.current.clear();
+      if (newTick) {
         seen.current = snapshot.nowMs;
         for (const event of snapshot.edgeTraversals) {
           if (particles.current.length >= 250) break;
@@ -66,17 +69,19 @@ export function TopologyCanvas({ topology, snapshot, selected, onSelect, editabl
       const elapsed = Math.min((time - previous) / 1000, 0.05); previous = time;
       for (const edge of topology.edges) {
         const a = nodes.get(edge.sourceNodeId)!; const b = nodes.get(edge.targetNodeId)!;
-        const x1 = a.x + 77, x2 = b.x - 77;
+        const direction = b.x < a.x ? -1 : 1;
+        const x1 = a.x + 74*direction, x2 = b.x - 74*direction;
         ctx.beginPath(); ctx.moveTo(x1, a.y); ctx.bezierCurveTo((x1+x2)/2, a.y, (x1+x2)/2, b.y, x2, b.y);
         ctx.strokeStyle = snapshot.circuits[edge.id] === 'open' ? '#ef4444' : '#334155'; ctx.lineWidth = 2; ctx.stroke();
-        ctx.fillStyle = '#64748b'; ctx.beginPath(); ctx.moveTo(x2, b.y); ctx.lineTo(x2-9, b.y-5); ctx.lineTo(x2-9, b.y+5); ctx.fill();
+        ctx.fillStyle = '#94a3b8'; ctx.beginPath(); ctx.moveTo(x2, b.y); ctx.lineTo(x2-12*direction, b.y-6); ctx.lineTo(x2-12*direction, b.y+6); ctx.closePath(); ctx.fill();
       }
       particles.current = particles.current.filter((particle) => particle.progress < 1);
       for (const particle of particles.current) {
         const edge = topology.edges.find((item) => item.id === particle.edge); if (!edge) continue;
         const a = nodes.get(edge.sourceNodeId)!, b = nodes.get(edge.targetNodeId)!;
         particle.progress += elapsed * particle.speed;
-        const t = Math.min(1, particle.progress), x1 = a.x+77, x2 = b.x-77, mid = (x1+x2)/2;
+        const direction = b.x < a.x ? -1 : 1;
+        const t = Math.min(1, particle.progress), x1 = a.x+74*direction, x2 = b.x-74*direction, mid = (x1+x2)/2;
         const x = (1-t)**3*x1+3*(1-t)**2*t*mid+3*(1-t)*t*t*mid+t**3*x2;
         const y = (1-t)**3*a.y+3*(1-t)**2*t*a.y+3*(1-t)*t*t*b.y+t**3*b.y;
         ctx.fillStyle = particle.color; ctx.shadowColor = particle.color; ctx.shadowBlur = 12; ctx.beginPath(); ctx.arc(x,y,3.5,0,Math.PI*2); ctx.fill(); ctx.shadowBlur = 0;
@@ -84,25 +89,42 @@ export function TopologyCanvas({ topology, snapshot, selected, onSelect, editabl
       for (const node of topology.nodes) {
         const m = snapshot.nodes[node.id]; if (!m) continue;
         const capacity = Math.max(1, node.workerPoolCapacity * (node.type === 'database' ? node.sharding.shardCount : 1));
-        const ratio = Math.min(1,m.activeWorkers/capacity);
-        const color = m.errorRate > .05 ? '#ef4444' : ratio > .8 ? '#f59e0b' : '#10b981';
-        ctx.fillStyle = '#111827'; ctx.strokeStyle = selected === node.id ? '#06b6d4' : '#334155'; ctx.lineWidth = selected === node.id ? 3 : 1.5;
-        ctx.beginPath(); ctx.roundRect(node.x-76,node.y-55,152,110,10); ctx.fill(); ctx.stroke();
-        ctx.fillStyle = color; ctx.font = 'bold 11px monospace'; ctx.fillText(node.type.toUpperCase(),node.x-62,node.y-34);
-        ctx.fillStyle = '#e2e8f0'; ctx.font = 'bold 13px sans-serif'; ctx.fillText(node.name.slice(0,19),node.x-62,node.y-10);
-        ctx.fillStyle = '#94a3b8'; ctx.font = '11px monospace'; ctx.fillText(`${m.activeWorkers}/${capacity} workers`,node.x-62,node.y+13);
-        ctx.fillStyle = '#1e293b'; ctx.fillRect(node.x-62,node.y+27,124,5); ctx.fillStyle = color; ctx.fillRect(node.x-62,node.y+27,124*Math.min(1,m.queueDepth/Math.max(1,node.maxQueueSize)),5);
+        const previousLoad = load.current.get(node.id) ?? { ratio: 0, queue: 0, warning: 0 };
+        const decay = Math.exp(-elapsed / 0.45);
+        const ratio = Math.max(m.activeWorkers/capacity, newTick ? m.peakUtilization : 0, previousLoad.ratio*decay);
+        const queue = Math.max(m.queueDepth, newTick ? m.peakQueueDepth : 0, previousLoad.queue*decay);
+        const warning = ratio > .75 ? 1 : Math.max(0, previousLoad.warning - elapsed);
+        load.current.set(node.id, { ratio, queue, warning });
+        const alert = m.errorRate > .02 ? '#ef4444' : warning > 0 ? '#f59e0b' : null;
+        const color = alert ?? '#10b981';
+        ctx.fillStyle = '#111827';
+        ctx.strokeStyle = alert === '#f59e0b' ? `rgba(245,158,11,${warning})` : alert ?? (selected === node.id ? '#06b6d4' : '#334155');
+        ctx.lineWidth = selected === node.id ? 3 : 1.5;
+        if (alert) { ctx.shadowColor = alert; ctx.shadowBlur = 9; }
+        ctx.beginPath(); ctx.roundRect(node.x-71,node.y-55,142,110,10); ctx.fill(); ctx.stroke();
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = color; ctx.font = 'bold 11px monospace'; ctx.fillText(node.type.toUpperCase(),node.x-61,node.y-34);
+        ctx.fillStyle = '#e2e8f0'; ctx.font = 'bold 13px sans-serif'; ctx.fillText(node.name,node.x-61,node.y-10,122);
+        ctx.fillStyle = '#94a3b8'; ctx.font = '10px monospace';
+        ctx.fillText(`${m.activeWorkers}/${capacity} workers`,node.x-61,node.y+8);
+        ctx.fillStyle = '#1e293b'; ctx.fillRect(node.x-61,node.y+31,122,4);
+        ctx.fillStyle = color;
+        const queueCapacity = node.maxQueueSize * (node.type === 'database' ? node.sharding.shardCount : 1);
+        ctx.fillRect(node.x-61,node.y+31,122*Math.min(1,queue/Math.max(1,queueCapacity)),4);
+        const extra = node.type === 'cache' ? `hit ${Math.round(m.cacheHitRate*100)}%` : `q ${Math.round(queue)}`;
+        ctx.fillStyle = '#cbd5e1'; ctx.font = '9px monospace';
+        ctx.fillText(`p99 ${Math.round(m.p99)}ms · err ${(m.errorRate*100).toFixed(1)}% · ${extra}`,node.x-61,node.y+47,122);
         ctx.beginPath(); ctx.strokeStyle = '#1F2937'; ctx.lineWidth = 3;
-        ctx.arc(node.x+57,node.y-34,12,0,Math.PI*2); ctx.stroke();
+        ctx.arc(node.x+54,node.y-34,12,0,Math.PI*2); ctx.stroke();
         if (ratio > 0) {
           ctx.beginPath(); ctx.strokeStyle = color;
-          ctx.arc(node.x+57,node.y-34,12,-Math.PI/2,-Math.PI/2+Math.PI*2*ratio); ctx.stroke();
+          ctx.arc(node.x+54,node.y-34,12,-Math.PI/2,-Math.PI/2+Math.PI*2*Math.min(1,ratio)); ctx.stroke();
         }
         ctx.fillStyle = '#e2e8f0'; ctx.font = 'bold 8px monospace';
         ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-        ctx.fillText(`${Math.round(ratio*100)}%`,node.x+57,node.y-34);
+        ctx.fillText(`${Math.round(ratio*100)}%`,node.x+54,node.y-34);
         ctx.textAlign = 'start'; ctx.textBaseline = 'alphabetic';
-        if (m.circuitState !== 'closed') { ctx.fillStyle = '#ef4444'; ctx.font = 'bold 10px monospace'; ctx.fillText(m.circuitState.toUpperCase().replace('_','-'),node.x-62,node.y+47); }
+        if (m.circuitState !== 'closed') { ctx.fillStyle = '#ef4444'; ctx.font = 'bold 10px monospace'; ctx.fillText(m.circuitState.toUpperCase().replace('_','-'),node.x-61,node.y+23); }
       }
       frame = requestAnimationFrame(draw);
     }
@@ -116,7 +138,7 @@ export function TopologyCanvas({ topology, snapshot, selected, onSelect, editabl
         const {scale,centerX,centerY}=geometry(rect,topology,view.current.zoom);
         const x=(e.clientX-rect.left-rect.width/2-view.current.x)/scale+centerX;
         const y=(e.clientY-rect.top-rect.height/2-view.current.y)/scale+centerY;
-        const hit=topology.nodes.find(n=>Math.abs(n.x-x)<76&&Math.abs(n.y-y)<55);
+        const hit=topology.nodes.find(n=>Math.abs(n.x-x)<71&&Math.abs(n.y-y)<55);
         drag.current={x:e.clientX,y:e.clientY,moved:false,nodeId:editable&&!connectMode?hit?.id:undefined};
         e.currentTarget.setPointerCapture(e.pointerId);
       }}
@@ -138,13 +160,13 @@ export function TopologyCanvas({ topology, snapshot, selected, onSelect, editabl
           const {scale,centerX,centerY}=geometry(rect,topology,view.current.zoom);
           const x=(e.clientX-rect.left-rect.width/2-view.current.x)/scale+centerX;
           const y=(e.clientY-rect.top-rect.height/2-view.current.y)/scale+centerY;
-          const hit=topology.nodes.find(n=>Math.abs(n.x-x)<76&&Math.abs(n.y-y)<55);
+          const hit=topology.nodes.find(n=>Math.abs(n.x-x)<71&&Math.abs(n.y-y)<55);
           if(hit) onSelect(hit.id);
         }
         drag.current=null;
       }} />
     <div className="canvas-heading"><span className="eyebrow">LIVE TOPOLOGY</span><span>Request flow</span></div>
     <button className="fit-button" onClick={fit}>⊞ &nbsp; Fit view</button>
-    <div className="canvas-legend"><span><i className="green"/>Healthy</span><span><i className="cyan"/>Cache</span><span><i className="violet"/>Retry</span><span><i className="red"/>Error</span></div>
+    <div className="canvas-legend"><span><i className="green"/>Healthy</span><span><i className="cyan"/>Cache</span><span><i className="violet"/>Retry</span><span><i className="amber"/>Rate Limited</span><span><i className="red"/>Error</span></div>
   </div>;
 }

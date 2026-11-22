@@ -20,6 +20,13 @@ function makeWorld(id:string,seed:number, sharedTopology?:ScenarioTopology) {
   const simulator=createSimulator(topology,{seed,scenario});
   return {scenario,topology,simulator};
 }
+const PREVIEW_MS = 12_000;
+function chartSample({nowMs, global}: TickSnapshot) { return { nowMs, global }; }
+function previewHistory(world: ReturnType<typeof makeWorld>, seed: number) {
+  if (!world.scenario) return [];
+  const preview = createSimulator(world.topology, {seed, scenario: world.scenario});
+  return preview.step(PREVIEW_MS).map(tick => ({...chartSample(tick), nowMs: tick.nowMs - PREVIEW_MS - 100}));
+}
 function initialWorld() {
   const state=decodeStateFromHash(window.location.hash);
   if (state && state.topology.nodes.every(n=>typeof (n as {x?:unknown}).x==='number' && typeof (n as {y?:unknown}).y==='number')) {
@@ -48,7 +55,7 @@ export default function App() {
   const [topology,setTopology]=useState(world.current.topology);
   const [snapshot,setSnapshot]=useState(world.current.simulator.getSnapshot());
   const [generation,setGeneration]=useState(0);
-  const [history,setHistory]=useState<TickSnapshot[]>([]);
+  const [history,setHistory]=useState<ReturnType<typeof chartSample>[]>(()=>previewHistory(initial.current!.world,initial.current!.seed));
   const [selected,setSelected]=useState<string|null>(()=>primaryNode(initial.current!.world.topology));
   const [sideCollapsed,setSideCollapsed]=useState(false);
   const [dockCollapsed,setDockCollapsed]=useState(false);
@@ -69,7 +76,7 @@ export default function App() {
   const speedRef=useRef(speed); speedRef.current=speed;
   const reset=useCallback((newId:string,newSeed:number)=>{
     world.current=makeWorld(newId,newSeed); setId(newId); setSeed(newSeed); setTopology(world.current.topology);
-    setSnapshot(world.current.simulator.getSnapshot()); setHistory([]); setSelected(primaryNode(world.current.topology));setGeneration(value=>value+1);
+    setSnapshot(world.current.simulator.getSnapshot()); setHistory(previewHistory(world.current,newSeed)); setSelected(primaryNode(world.current.topology));setGeneration(value=>value+1);
     baselineTopology.current=world.current.scenario?.topology??world.current.topology;
     outage.current={peak:null,maxP99:0,maxError:0,changed:false,resolved:false};
     setBrief(false);setPostOpen(false);setResolved(false);setBaselineMetrics(null);setResolution(null);setConnectMode(false);setConnectSource(null);setSandboxExport(false);
@@ -97,7 +104,19 @@ export default function App() {
             setResolved(true);setPostOpen(true);setResolution(tick);
           }
         }
-        setSnapshot(ticks[ticks.length-1]);setHistory(h=>[...h,...ticks.map(tick=>({...tick,nodes:{},circuits:{},activeFaults:[],recentTraces:[],edgeTraversals:[]}))].slice(-600));
+        const latest = ticks[ticks.length-1];
+        // Rendering may catch up multiple ticks in one frame. Keep the highest load from the batch.
+        const nodes = ticks.length === 1 ? latest.nodes : Object.fromEntries(
+          Object.entries(latest.nodes).map(([id, metrics]) => {
+            const samples = ticks.map(tick => tick.nodes[id]);
+            return [id, {...metrics,
+              peakActiveWorkers: Math.max(...samples.map(node => node.peakActiveWorkers)),
+              peakUtilization: Math.max(...samples.map(node => node.peakUtilization)),
+              peakQueueDepth: Math.max(...samples.map(node => node.peakQueueDepth)),
+            }];
+          }),
+        );
+        setSnapshot(nodes === latest.nodes ? latest : {...latest, nodes});setHistory(h=>[...h,...ticks.map(chartSample)].slice(-600));
       }} }
       frame=requestAnimationFrame(loop);
     };
@@ -107,7 +126,7 @@ export default function App() {
     const handler=(e:KeyboardEvent)=>{
       if(e.target instanceof HTMLInputElement||e.target instanceof HTMLSelectElement||e.target instanceof HTMLTextAreaElement||e.target instanceof HTMLElement&&e.target.isContentEditable)return;
       if(e.key==='Escape'){setBrief(false);setPostOpen(false);setSandboxExport(false);setConnectMode(false);setConnectSource(null);return;}
-      if(e.code==='Space'){e.preventDefault();setPlaying(p=>!p);return;}
+      if(e.code==='Space'){if(e.target instanceof HTMLElement && e.target.getAttribute('role')==='switch')return;e.preventDefault();setPlaying(p=>!p);return;}
       if(e.key>='1'&&e.key<='5'){reset(incidents[Number(e.key)-1].id,seed);return;}
       if(e.key.toLowerCase()==='s'){reset(sandbox.id,seed);return;}
       if(e.key.toLowerCase()==='r'){
@@ -169,15 +188,19 @@ export default function App() {
     simulator.injectFault({id:`manual-${++faultSequence.current}`,nodeId:target,kind,startMs:simulator.getSnapshot().nowMs,durationMs:60_000,parameters});
     setSnapshot(simulator.getSnapshot());
   };
-  const clearFault=(faultId:string)=>{world.current.simulator.clearFault(faultId);setSnapshot(world.current.simulator.getSnapshot());};
+  const clearFault=(faultId:string)=>{
+    if (world.current.scenario?.initialFaults.some(fault=>fault.id===faultId)) return;
+    world.current.simulator.clearFault(faultId);
+    setSnapshot(world.current.simulator.getSnapshot());
+  };
   const shareUrl=()=>window.location.href.split('#')[0]+encodeStateToHash({topology,seed,scenarioId:id});
   const copyShare=async()=>{try{await navigator.clipboard.writeText(shareUrl());flash('Share URL copied.');}catch{flash('Copy failed. Open the resilience pack to select the URL.');setSandboxExport(true);}};
   const scenario=world.current.scenario;
   return <div className="app">
-    <TopControlBar id={id} onScenario={next=>reset(next,seed)} playing={playing} onPlay={()=>setPlaying(p=>!p)} speed={speed} onSpeed={setSpeed} seed={seed} onSeed={value=>reset(id,Number.isFinite(value)?value:0)} onReset={()=>{if(id===sandbox.id){world.current=makeWorld(id,seed,topology);setSnapshot(world.current.simulator.getSnapshot());setHistory([]);setGeneration(value=>value+1);setSelected(primaryNode(topology));setConnectMode(false);setConnectSource(null);setSandboxExport(false);}else reset(id,seed);}} onExport={()=>scenario?setPostOpen(true):setSandboxExport(true)} snapshot={snapshot}/>
+    <TopControlBar id={id} onScenario={next=>reset(next,seed)} playing={playing} onPlay={()=>setPlaying(p=>!p)} speed={speed} onSpeed={setSpeed} seed={seed} onSeed={value=>reset(id,Number.isFinite(value)?value:0)} onReset={()=>{if(id===sandbox.id){world.current=makeWorld(id,seed,topology);setSnapshot(world.current.simulator.getSnapshot());setHistory([]);setGeneration(value=>value+1);setSelected(primaryNode(topology));setConnectMode(false);setConnectSource(null);setSandboxExport(false);}else reset(id,seed);}} onExport={()=>scenario?setPostOpen(true):setSandboxExport(true)} snapshot={snapshot} targets={scenario?.slaTargets}/>
     <div className="workspace"><main className="main"><div className="mission"><div className="mission-copy"><span className="incident-tag">{scenario?'● SEV-1 INCIDENT':'● SANDBOX'}</span><span className="mission-id">{scenario?'INCIDENT / '+String(incidents.findIndex(s=>s.id===id)+1).padStart(2,'0'):'FREE BUILD'}</span><h1>{scenario?.name??sandbox.name}</h1><p>{scenario?.symptomSummary??'Explore the starter topology and tune node configuration.'}</p></div><div className="mission-actions"><button onClick={()=>setBrief(true)} disabled={!scenario}>☷ &nbsp; Brief / Hints</button></div></div>
-      {scenario && <div className={'resolution-banner '+(resolved?'resolved':'')}>{resolved?<button onClick={()=>setPostOpen(true)}>✓ Incident resolved · View post-mortem</button>:<>SLA HOLD <b>{Math.max(0,scenario.slaTargets.holdDurationMs-(snapshot.sla?.healthyDurationMs??0))/1000}s</b> · BUDGET <b>{snapshot.sla?.remainingPercent.toFixed(1)}%</b></>}</div>}
-      <ChaosToolbar topology={topology} selected={selected} faults={snapshot.activeFaults} inject={inject} clear={clearFault}/>
+      {resolved && <div className="resolution-banner resolved"><button onClick={()=>setPostOpen(true)}>✓ Incident resolved · View post-mortem</button></div>}
+      <ChaosToolbar topology={topology} selected={selected} faults={snapshot.activeFaults} scenarioFaults={scenario?.initialFaults} inject={inject} clear={clearFault}/>
       {!scenario&&<div className="sandbox-bar"><span>ADD NODE</span>{(['traffic','gateway','service','cache','database','queue','external'] as NodeType[]).map(type=><button key={type} onClick={()=>addNode(type)}>{type}</button>)}<button className={connectMode?'active':''} onClick={()=>{setConnectMode(!connectMode);setConnectSource(null);}}>{connectMode?(connectSource?'Choose target':'Choose source'):'Connect mode'}</button>{selected&&<button className="delete-node" onClick={removeNode}>Delete node</button>}</div>}
       {toast&&<div className="toast" role="status">{toast}</div>}
       <TopologyCanvas topology={topology} snapshot={snapshot} selected={selected} onSelect={selectNode} editable={!scenario} connectMode={connectMode} onMove={(nodeId,x,y)=>setTopology(t=>({...t,nodes:t.nodes.map(n=>n.id===nodeId?{...n,x,y}:n)}))}/>

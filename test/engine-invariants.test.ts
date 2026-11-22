@@ -529,3 +529,24 @@ describe('long-running simulation', () => {
     expect(Object.values(final.global).filter(value => typeof value === 'number').every(Number.isFinite)).toBe(true);
   }, 15_000);
 });
+
+describe('per-tick peak load telemetry', () => {
+  it('reports worker and queue bursts that drain before the tick ends, then clears the peaks', () => {
+    const s = sim([
+      source(100),
+      node('db', 'database', {
+        workerPoolCapacity: 1, maxQueueSize: 4, baseLatencyMs: 15, serviceTimeSigma: 0,
+        sharding: { shardCount: 4, zipfSkew: 100 },
+      }),
+    ]);
+    s.step(24);
+    s.updateNodeConfig('in', { trafficRps: 0 });
+    const [burst] = s.step(76);
+    expect(burst.nodes.db).toMatchObject({
+      activeWorkers: 0, queueDepth: 0, peakActiveWorkers: 1, peakUtilization: 1, peakQueueDepth: 1,
+    });
+    expect(s.getSnapshot().nodes.db.peakQueueDepth).toBe(1);
+    const [idle] = s.step();
+    expect(idle.nodes.db).toMatchObject({ peakActiveWorkers: 0, peakUtilization: 0, peakQueueDepth: 0 });
+  });
+});

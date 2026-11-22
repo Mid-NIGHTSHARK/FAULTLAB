@@ -21,11 +21,20 @@ export type NodeConfigPatch = Partial<Omit<NodeConfig,
   [Key in 'retryPolicy' | 'circuitBreaker' | 'cache' | 'rateLimiter' | 'sharding']?: Partial<NodeConfig[Key]>;
 } & Pick<NodeConfig, 'edgeCircuitBreakers'>;
 
+export interface NodeTickMetrics extends TickMetrics {
+  peakActiveWorkers: number;
+  /** Maximum occupancy of any worker pool, including individual database shards. */
+  peakUtilization: number;
+  peakQueueDepth: number;
+}
+
+const emptyPeaks = () => ({ peakActiveWorkers: 0, peakUtilization: 0, peakQueueDepth: 0 });
+
 /** RPS counts offered arrivals. Latencies and error rates count completed responses. */
 export interface TickSnapshot {
   nowMs: number;
   global: TickMetrics;
-  nodes: Record<string, TickMetrics>;
+  nodes: Record<string, NodeTickMetrics>;
   circuits: Record<string, CircuitState>;
   sla: SlaBudgetSnapshot | null;
   activeFaults: FaultEvent[];
@@ -106,6 +115,9 @@ interface Machine {
   metrics: RollingMetrics;
   arrivals: Arrivals;
   pools: Pool[];
+  activeWorkers: number;
+  queueDepth: number;
+  peaks: ReturnType<typeof emptyPeaks>;
   links: Link[];
   cache: Map<number, number>;
   flights: Map<number, Reply[]>;
@@ -224,6 +236,7 @@ export function createSimulator(topology: Topology, options: SimulatorOptions) {
       if (machines.has(config.id)) throw new Error(`Duplicate node ID: ${config.id}`);
       const machine: Machine = {
         config, metrics: new RollingMetrics(period), arrivals: new Arrivals(), pools: [], links: [],
+        activeWorkers: 0, queueDepth: 0, peaks: emptyPeaks(),
         cache: new Map(), flights: new Map(), quantile: () => 0, effects: cleanEffects(),
         crashEpoch: 0, cacheEpoch: 0, tokens: config.rateLimiter.burst, tokenTime: 0,
         ingressProgress: 0, ingressTime: 0, ingressRate: 0,
@@ -522,6 +535,7 @@ export function createSimulator(topology: Topology, options: SimulatorOptions) {
     while (pool.workers < machine.config.workerPoolCapacity && pool.waiting.size > 0) {
       const [span, start] = pool.waiting.entries().next().value!;
       pool.waiting.delete(span);
+      machine.queueDepth--;
       start();
     }
   }
@@ -555,6 +569,7 @@ export function createSimulator(topology: Topology, options: SimulatorOptions) {
       cancelDeadline?.();
       if (queued) {
         pool.waiting.delete(span);
+        machine.queueDepth--;
         span.queueWaitMs = now - span.startMs;
       }
       if (serviceStart !== undefined) span.serviceMs = Math.min(localDuration, now - serviceStart);
@@ -571,13 +586,17 @@ export function createSimulator(topology: Topology, options: SimulatorOptions) {
       serviceStart = now;
       const { config, effects, crashEpoch } = machine;
       pool.workers++;
+      machine.activeWorkers++;
+      machine.peaks.peakActiveWorkers = Math.max(machine.peaks.peakActiveWorkers, machine.activeWorkers);
       const utilization = pool.workers / Math.max(1, config.workerPoolCapacity);
+      machine.peaks.peakUtilization = Math.max(machine.peaks.peakUtilization, utilization);
       const median = config.baseLatencyMs * (1 + (config.saturationPenalty ?? 0.25) * utilization ** 2);
       localDuration = (median ? rng.nextLogNormal(median, config.serviceTimeSigma ?? 0.25) : 0) + effects.latency;
       const fails = effects.survival < 1 && rng.nextFloat() >= effects.survival;
       queue.schedule(now + localDuration, () => {
         const release = () => {
           pool.workers--;
+          machine.activeWorkers--;
           drain(machine, pool);
         };
         if (settled) {
@@ -617,6 +636,8 @@ export function createSimulator(topology: Topology, options: SimulatorOptions) {
     else {
       queued = true;
       pool.waiting.set(span, start);
+      machine.queueDepth++;
+      machine.peaks.peakQueueDepth = Math.max(machine.peaks.peakQueueDepth, machine.queueDepth);
     }
     if (isAsync) respond(ACCEPTED);
   }
@@ -659,7 +680,7 @@ export function createSimulator(topology: Topology, options: SimulatorOptions) {
     let queueDepth = 0;
     let activeWorkers = 0;
     let circuitState: CircuitState = 'closed';
-    const nodes: [string, TickMetrics][] = [];
+    const nodes: [string, NodeTickMetrics][] = [];
     const circuits: [string, CircuitState][] = [];
     const worse = (a: CircuitState, b: CircuitState): CircuitState =>
       a === 'open' || b === 'open' ? 'open' : a === 'half_open' || b === 'half_open' ? 'half_open' : 'closed';
@@ -673,14 +694,10 @@ export function createSimulator(topology: Topology, options: SimulatorOptions) {
         circuits.push([link.edge.id, state]);
         nodeCircuit = worse(nodeCircuit, state);
       }
-      const gauges = { queueDepth: 0, activeWorkers: 0, circuitState: nodeCircuit };
-      for (const pool of machine.pools) {
-        gauges.queueDepth += pool.waiting.size;
-        gauges.activeWorkers += pool.workers;
-      }
+      const gauges = { queueDepth: machine.queueDepth, activeWorkers: machine.activeWorkers, circuitState: nodeCircuit };
       const traffic = machine.arrivals.read(now, period,
         machine.config.type === 'database' ? machine.config.sharding.shardCount : 0);
-      const nodeMetrics = { ...machine.metrics.snapshot(now, gauges), ...traffic };
+      const nodeMetrics = { ...machine.metrics.snapshot(now, gauges), ...traffic, ...machine.peaks };
       const cache = machine.metrics.cacheCounts();
       lookups += cache.lookups;
       hits += cache.hits;
@@ -714,6 +731,16 @@ export function createSimulator(topology: Topology, options: SimulatorOptions) {
     }
     const snapshots: TickSnapshot[] = [];
     function runUntil(end: number): void {
+      if (now === lastVisualAt) {
+        for (const machine of machines.values()) {
+          machine.peaks = {
+            peakActiveWorkers: machine.activeWorkers,
+            peakQueueDepth: machine.queueDepth,
+            peakUtilization: machine.pools.reduce((peak, pool) =>
+              Math.max(peak, pool.workers / Math.max(1, machine.config.workerPoolCapacity)), 0),
+          };
+        }
+      }
       let event = queue.peek();
       while (event && event.at <= end) {
         now = event.at;

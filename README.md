@@ -2,7 +2,7 @@
 
 A deterministic distributed-systems chaos lab for investigating SEV-1 incidents and testing resilience fixes in the browser.
 
-**Live Demo:** [Live Demo — Coming Soon / Replace with Vercel URL]
+**Live Demo:** [https://faultlab-iota.vercel.app/](https://faultlab-iota.vercel.app/)
 
 <!-- Demo GIF: drop a recording at docs/demo.gif, then uncomment:
 ![FaultLab demo](docs/demo.gif)

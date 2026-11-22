@@ -5,11 +5,12 @@ interface Props {
   topology: ScenarioTopology;
   selected: string | null;
   faults: FaultEvent[];
+  scenarioFaults?: FaultEvent[];
   inject: (kind: string, target: string, parameters: Record<string,number>) => void;
   clear: (id: string) => void;
 }
 
-export function ChaosToolbar({topology,selected,faults,inject,clear}:Props) {
+export function ChaosToolbar({topology,selected,faults,scenarioFaults,inject,clear}:Props) {
   const selectedNode=topology.nodes.find(n=>n.id===selected);
   const find=(types:NodeType[], preferred=true)=> (preferred && selectedNode && types.includes(selectedNode.type) ? selectedNode : topology.nodes.find(n=>types.includes(n.type)));
   const entries: {label:string;kind:string;target:typeof selectedNode;params:Record<string,number>}[]=[
@@ -19,5 +20,5 @@ export function ChaosToolbar({topology,selected,faults,inject,clear}:Props) {
     {label:'Node Crash',kind:'node_crash',target:selectedNode??find(['database','external','service']),params:{}},
     {label:'Hot-Key Skew',kind:'hot_key_skew',target:find(['database','cache']),params:{skew:4}},
   ];
-  return <div className="chaos-bar"><span className="chaos-label">⚡ CHAOS</span>{entries.map(entry=><button key={entry.kind} disabled={!entry.target} title={entry.target?`Inject ${entry.label} on ${entry.target.name}`:'No compatible node in this topology'} onClick={()=>entry.target&&inject(entry.kind,entry.target.id,entry.params)}>{entry.label}</button>)}<div className="fault-pills">{faults.map(f=><span key={f.id} className="fault-pill" title={f.id}>{f.kind.replaceAll('_',' ')} · {topology.nodes.find(n=>n.id===f.nodeId)?.name??f.nodeId}<button aria-label={`Clear ${f.kind} on ${f.nodeId}`} onClick={()=>clear(f.id)}>×</button></span>)}</div></div>;
+  return <div className="chaos-bar"><span className="chaos-label">⚡ CHAOS</span>{entries.map(entry=><button key={entry.kind} disabled={!entry.target} title={entry.target?`Inject ${entry.label} on ${entry.target.name}`:'No compatible node in this topology'} onClick={()=>entry.target&&inject(entry.kind,entry.target.id,entry.params)}>{entry.label}</button>)}<div className="fault-pills">{faults.map(f=>{const locked=scenarioFaults?.some(initial=>initial.id===f.id);return <span key={f.id} className="fault-pill" title={locked?"Scenario fault · ends on schedule":f.id}>{locked&&<b className="scenario-lock">SCENARIO</b>}{f.kind.replaceAll('_',' ')} · {topology.nodes.find(n=>n.id===f.nodeId)?.name??f.nodeId}{!locked&&<button aria-label={`Clear ${f.kind} on ${f.nodeId}`} onClick={()=>clear(f.id)}>×</button>}</span>})}</div></div>;
 }
