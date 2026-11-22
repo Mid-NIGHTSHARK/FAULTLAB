@@ -4,7 +4,7 @@ import { RollingMetrics, SlaBudgetTracker, type SlaBudgetSnapshot } from './metr
 import { createPrng, createZipfQuantile } from './prng';
 import { TraceRecorder } from './tracer';
 import type {
-  CircuitState, Edge, FaultEvent, IncidentScenario, NodeConfig, RequestTrace,
+  CircuitBreakerConfig, CircuitState, Edge, FaultEvent, IncidentScenario, NodeConfig, RequestTrace,
   TickMetrics, Topology, TraceSpan, TraceStatus,
 } from './types';
 
@@ -17,9 +17,9 @@ export interface SimulatorOptions {
 }
 
 export type NodeConfigPatch = Partial<Omit<NodeConfig,
-  'id' | 'type' | 'retryPolicy' | 'circuitBreaker' | 'cache' | 'rateLimiter' | 'sharding'>> & {
+  'id' | 'type' | 'retryPolicy' | 'circuitBreaker' | 'cache' | 'rateLimiter' | 'sharding' | 'edgeCircuitBreakers'>> & {
   [Key in 'retryPolicy' | 'circuitBreaker' | 'cache' | 'rateLimiter' | 'sharding']?: Partial<NodeConfig[Key]>;
-};
+} & Pick<NodeConfig, 'edgeCircuitBreakers'>;
 
 export interface EdgeTraversal {
   edgeId: string;
@@ -128,11 +128,26 @@ interface Machine {
   ingressRate: number;
 }
 
+function validBreaker(policy: CircuitBreakerConfig): boolean {
+  const durations = [policy.openDurationMs ?? policy.resetTimeoutMs, policy.windowMs ?? 1_000];
+  const counts = [policy.minSamples ?? policy.failureThreshold, policy.halfOpenMaxRequests];
+  const threshold = policy.errorThresholdPct ?? 50;
+  return durations.every((value) => Number.isFinite(value) && value > 0) &&
+    counts.every((value) => Number.isSafeInteger(value) && value > 0 && value < 2 ** 32) &&
+    Number.isFinite(threshold) && threshold >= 0 && threshold <= 100;
+}
+
 function patchConfig(config: NodeConfig, patch: NodeConfigPatch): NodeConfig {
+  const edgeCircuitBreakers: NonNullable<NodeConfig['edgeCircuitBreakers']> = Object.create(null);
+  Object.assign(edgeCircuitBreakers, config.edgeCircuitBreakers);
+  for (const [id, override] of Object.entries(patch.edgeCircuitBreakers ?? {})) {
+    edgeCircuitBreakers[id] = { ...edgeCircuitBreakers[id], ...override };
+  }
   const next = {
     ...config, ...patch, id: config.id, type: config.type,
     retryPolicy: { ...config.retryPolicy, ...patch.retryPolicy },
     circuitBreaker: { ...config.circuitBreaker, ...patch.circuitBreaker },
+    edgeCircuitBreakers,
     cache: { ...config.cache, ...patch.cache },
     rateLimiter: { ...config.rateLimiter, ...patch.rateLimiter },
     sharding: { ...config.sharding, ...patch.sharding },
@@ -142,21 +157,20 @@ function patchConfig(config: NodeConfig, patch: NodeConfigPatch): NodeConfig {
     next.trafficRps ?? 0, next.baseLatencyMs, next.serviceTimeSigma ?? 0, next.saturationPenalty ?? 0,
     rateLimiter.rps, rateLimiter.burst, retryPolicy.delayMs, cache.ttlMs, sharding.zipfSkew,
   ];
-  const positive = [
-    next.timeoutMs, circuitBreaker.openDurationMs ?? circuitBreaker.resetTimeoutMs, circuitBreaker.windowMs ?? 1_000,
-  ];
   const counts = [next.workerPoolCapacity, next.maxQueueSize, retryPolicy.retryBudget];
-  const positiveCounts = [
-    circuitBreaker.minSamples ?? circuitBreaker.failureThreshold, circuitBreaker.halfOpenMaxRequests,
-    cache.keyCount ?? 1_024, sharding.shardCount,
-  ];
-  const percentages = [cache.ttlJitterPercent, circuitBreaker.errorThresholdPct ?? 50];
+  const positiveCounts = [cache.keyCount ?? 1_024, sharding.shardCount];
   if (nonnegative.some((value) => !Number.isFinite(value) || value < 0) ||
-      positive.some((value) => !Number.isFinite(value) || value <= 0) ||
+      !Number.isFinite(next.timeoutMs) || next.timeoutMs <= 0 ||
       counts.some((value) => !Number.isSafeInteger(value) || value < 0) ||
       positiveCounts.some((value) => !Number.isInteger(value) || value < 1 || value >= 2 ** 32) ||
-      percentages.some((value) => !Number.isFinite(value) || value < 0 || value > 100)) {
+      !Number.isFinite(cache.ttlJitterPercent) || cache.ttlJitterPercent < 0 || cache.ttlJitterPercent > 100 ||
+      !validBreaker(circuitBreaker)) {
     throw new RangeError(`Invalid configuration for node ${config.id}`);
+  }
+  for (const [id, override] of Object.entries(edgeCircuitBreakers)) {
+    if (!validBreaker({ ...circuitBreaker, ...override })) {
+      throw new RangeError(`Invalid circuit breaker configuration for edge ${id}`);
+    }
   }
   return next;
 }
@@ -169,7 +183,7 @@ export function createSimulator(topology: Topology, options: SimulatorOptions) {
   const tickMs = options.tickMs ?? 100;
   const period = options.metricsWindowMs ?? 1_000;
   if (!Number.isFinite(tickMs) || tickMs <= 0) throw new RangeError('Expected a positive tick duration');
-  const definitions = topology.nodes.map((config) => patchConfig(config, {}));
+  const definitions = topology.nodes.map((config) => patchConfig(config, { edgeCircuitBreakers: config.edgeCircuitBreakers }));
   const edges = topology.edges.map((edge) => ({ ...edge }));
   const scenario = options.scenario && {
     slaTargets: { ...options.scenario.slaTargets },
@@ -230,6 +244,7 @@ export function createSimulator(topology: Topology, options: SimulatorOptions) {
       edgeIds.add(edge.id);
       machineFor(edge.sourceNodeId).links.push({ edge, target: machineFor(edge.targetNodeId), breaker: new CircuitBreaker() });
     }
+    for (const machine of machines.values()) validateBreakerEdges(machine, machine.config);
     const visiting = new Set<Machine>();
     const visited = new Set<Machine>();
     function visit(machine: Machine): void {
@@ -297,14 +312,23 @@ export function createSimulator(topology: Topology, options: SimulatorOptions) {
     machine.tokenTime = now;
   }
 
+  function validateBreakerEdges(machine: Machine, config: NodeConfig): void {
+    for (const id of Object.keys(config.edgeCircuitBreakers ?? {})) {
+      if (!machine.links.some(({ edge }) => edge.id === id)) {
+        throw new Error(`Unknown outgoing edge ${id} on node ${config.id}`);
+      }
+    }
+  }
+
   function updateNodeConfig(nodeId: string, patch: NodeConfigPatch): void {
     const machine = machineFor(nodeId);
     const old = machine.config;
     const next = patchConfig(old, patch);
+    validateBreakerEdges(machine, next);
     refill(machine);
     machine.config = next;
     machine.tokens = Math.min(machine.tokens, next.rateLimiter.burst);
-    if (next.cache.keyCount !== old.cache.keyCount) {
+    if (next.cache.keyCount !== old.cache.keyCount || next.cache.enabled !== old.cache.enabled) {
       machine.cache.clear();
       machine.flights.clear();
       machine.cacheEpoch++;
@@ -460,11 +484,16 @@ export function createSimulator(topology: Topology, options: SimulatorOptions) {
       const finish: Reply = (result) => {
         outcomes[index] = result;
         if (--waiting === 0) {
-          reply(outcomes.find((outcome) => outcome.status !== 'ok') ?? outcomes.find((outcome) => outcome.code === 202) ?? OK);
+          reply(outcomes.find((outcome, index) => machine.links[index].edge.required !== false && outcome.status !== 'ok') ??
+            outcomes.find((outcome, index) => machine.links[index].edge.required !== false && outcome.code === 202) ?? OK);
         }
       };
+      const breakerConfig = () => {
+        const override = machine.config.edgeCircuitBreakers?.[link.edge.id];
+        return override ? { ...machine.config.circuitBreaker, ...override } : machine.config.circuitBreaker;
+      };
       function dispatch(attempt: number, previous: TraceSpan): void {
-        const epoch = link.breaker.admit(now, machine.config.circuitBreaker);
+        const epoch = link.breaker.admit(now, breakerConfig());
         if (epoch === undefined) {
           const blocked = newSpan(request, link.target, previous, attempt);
           finishSpan(request, blocked, CIRCUIT_OPEN);
@@ -473,7 +502,7 @@ export function createSimulator(topology: Topology, options: SimulatorOptions) {
         }
         sampleTraversal(link, request, attempt);
         invoke(link.target, request, key, previous, attempt, (result, span) => {
-          link.breaker.settle(epoch, now, result.status !== 'ok', machine.config.circuitBreaker);
+          link.breaker.settle(epoch, now, result.status !== 'ok', breakerConfig());
           const policy = machine.config.retryPolicy;
           if (result.code < 500 || result === CIRCUIT_OPEN || policy.strategy === 'none' ||
               attempt >= policy.retryBudget || !alive()) {
@@ -560,7 +589,7 @@ export function createSimulator(topology: Topology, options: SimulatorOptions) {
         } else if (effects.crashed || machine.crashEpoch !== crashEpoch || fails) {
           release();
           complete(effects.crashed || machine.crashEpoch !== crashEpoch ? CRASH : INJECTED);
-        } else if (config.type === 'cache') {
+        } else if (config.type === 'cache' && machine.config.cache.enabled !== false) {
           release();
           lookup(machine, request, key, span, () => !settled, (outcome) => { cacheOutcome = outcome; },
             (result) => complete(machine.crashEpoch === crashEpoch ? result : CRASH));

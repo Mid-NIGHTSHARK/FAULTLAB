@@ -112,11 +112,13 @@ export class SlaBudgetTracker {
   private healthyDurationMs = 0;
 
   constructor(scenario: Pick<IncidentScenario, 'slaTargets' | 'errorBudget'>, readonly periodMs: number) {
-    const { availability, p95LatencyMs } = scenario.slaTargets;
+    const { availability, p95LatencyMs, p99LatencyMs, maxErrorRatePct, holdDurationMs } = scenario.slaTargets;
     if (!positiveDuration(periodMs) || !Number.isFinite(scenario.errorBudget) ||
         scenario.errorBudget < 0 || scenario.errorBudget > 1 ||
         !Number.isFinite(availability) || availability < 0 || availability > 1 ||
-        !Number.isFinite(p95LatencyMs) || p95LatencyMs < 0) {
+        [p95LatencyMs, p99LatencyMs, maxErrorRatePct, holdDurationMs].some(
+          (value) => value !== undefined && (!Number.isFinite(value) || value < 0),
+        ) || (maxErrorRatePct ?? 0) > 100) {
       throw new RangeError('Invalid SLA targets, error budget, or budget period');
     }
     this.targets = { ...scenario.slaTargets };
@@ -124,17 +126,22 @@ export class SlaBudgetTracker {
   }
 
   /** Apply measured metrics for the next simulation interval. Breaches expire after periodMs. */
-  advance(durationMs: number, metrics: Pick<TickMetrics, 'errorRate' | 'p95'>): SlaBudgetSnapshot {
+  advance(durationMs: number, metrics: Pick<TickMetrics, 'errorRate' | 'p95'> & Partial<Pick<TickMetrics, 'p99'>>): SlaBudgetSnapshot {
     const endMs = this.elapsedMs + durationMs;
     if (!positiveDuration(durationMs) || !Number.isFinite(endMs) || endMs <= this.elapsedMs) {
       throw new RangeError('Expected a positive interval that advances simulation time');
     }
-    if (!Number.isFinite(metrics.errorRate) || metrics.errorRate < 0 || metrics.errorRate > 1 ||
-        !Number.isFinite(metrics.p95) || metrics.p95 < 0) {
+    const { p95LatencyMs, p99LatencyMs, availability, maxErrorRatePct } = this.targets;
+    const { errorRate, p95, p99 } = metrics;
+    if (!Number.isFinite(errorRate) || errorRate < 0 || errorRate > 1 ||
+        !Number.isFinite(p95) || p95 < 0 ||
+        (p99LatencyMs !== undefined && (p99 === undefined || !Number.isFinite(p99) || p99 < 0))) {
       throw new RangeError('Invalid SLA measurements');
     }
-    const healthy = 1 - metrics.errorRate >= this.targets.availability &&
-      metrics.p95 <= this.targets.p95LatencyMs;
+    const healthy = 1 - errorRate >= availability &&
+      (maxErrorRatePct === undefined || errorRate * 100 <= maxErrorRatePct) &&
+      (p95LatencyMs === undefined || p95 <= p95LatencyMs) &&
+      (p99LatencyMs === undefined || (p99 !== undefined && p99 <= p99LatencyMs));
 
     if (healthy) {
       this.healthyDurationMs += durationMs;

@@ -62,6 +62,22 @@ describe('SLA error budget', () => {
     });
   });
 
+  it('burns budget on a p99 breach or an explicit error-rate breach independently', () => {
+    const tracker = new SlaBudgetTracker({
+      errorBudget: 0.2, slaTargets: { availability: 0.9, p99LatencyMs: 80, maxErrorRatePct: 2 },
+    }, 1_000);
+    expect(() => tracker.advance(50, { errorRate: 0, p95: 10 })).toThrow(RangeError);
+    expect(tracker.advance(50, { errorRate: 0, p95: 10, p99: 81 })).toEqual({
+      remainingPercent: 75, healthyDurationMs: 0,
+    });
+    expect(tracker.advance(50, { errorRate: 0.03, p95: 10, p99: 80 })).toEqual({
+      remainingPercent: 50, healthyDurationMs: 0,
+    });
+    expect(tracker.advance(50, { errorRate: 0.02, p95: 10, p99: 80 })).toEqual({
+      remainingPercent: 50, healthyDurationMs: 50,
+    });
+  });
+
   it('handles a zero tolerance budget and separated breaches', () => {
     const tracker = new SlaBudgetTracker({ ...scenario, errorBudget: 0 }, 100);
     expect(tracker.snapshot().remainingPercent).toBe(100);

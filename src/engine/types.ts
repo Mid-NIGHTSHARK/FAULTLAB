@@ -21,6 +21,8 @@ export interface CircuitBreakerConfig {
 }
 
 export interface CacheConfig {
+  /** Disabled caches forward requests without reads, writes, or coalescing. */
+  enabled?: boolean;
   ttlMs: number;
   ttlJitterPercent: number;
   singleflight: boolean;
@@ -51,6 +53,8 @@ export interface NodeConfig {
   timeoutMs: number;
   retryPolicy: RetryPolicy;
   circuitBreaker: CircuitBreakerConfig;
+  /** Overrides keyed by outgoing edge ID. Unspecified fields inherit the node policy. */
+  edgeCircuitBreakers?: Record<string, Partial<CircuitBreakerConfig>>;
   cache: CacheConfig;
   rateLimiter: RateLimiterConfig;
   sharding: ShardingConfig;
@@ -60,6 +64,8 @@ export interface Edge {
   id: string;
   sourceNodeId: string;
   targetNodeId: string;
+  /** Optional branches still consume time and capacity, but may fail without failing the request. */
+  required?: boolean;
 }
 
 export interface Topology {
@@ -126,7 +132,11 @@ export interface IncidentScenario {
   topology: Topology;
   slaTargets: {
     availability: number;
-    p95LatencyMs: number;
+    p95LatencyMs?: number;
+    p99LatencyMs?: number;
+    /** Percentage in [0, 100]. Can be combined with an availability target. */
+    maxErrorRatePct?: number;
+    holdDurationMs?: number;
   };
   /** Fraction of the budget period allowed to breach either SLA target. */
   errorBudget: number;
