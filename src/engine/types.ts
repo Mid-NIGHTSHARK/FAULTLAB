@@ -69,19 +69,27 @@ export interface FaultEvent {
   parameters: Record<string, string | number | boolean>;
 }
 
+export type TraceStatus = 'ok' | 'error' | 'timeout' | 'dropped';
+
 export interface TraceSpan {
   id: string;
   parentSpanId?: string;
   nodeId: string;
   startMs: number;
   durationMs: number;
-  status: 'ok' | 'error' | 'timeout';
+  queueWaitMs: number;
+  serviceMs: number;
+  /** Zero for the initial attempt. */
+  retryAttempt: number;
+  status: TraceStatus;
+  dropReason?: string;
 }
 
 export interface RequestTrace {
   requestId: string;
   startMs: number;
   durationMs: number;
+  status: TraceStatus;
   spans: TraceSpan[];
 }
 
@@ -107,6 +115,7 @@ export interface IncidentScenario {
     availability: number;
     p95LatencyMs: number;
   };
+  /** Fraction of the budget period allowed to breach either SLA target. */
   errorBudget: number;
   initialFaults: FaultEvent[];
   canonicalFixHints: string[];
